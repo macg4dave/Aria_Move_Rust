@@ -1,12 +1,16 @@
 use anyhow::Result;
 use clap::Parser;
 use std::path::PathBuf;
-use tracing::{error, info};
+use tracing::{error, info, Level};
 use tracing_subscriber::fmt::time::LocalTime;
 
 use aria_move::{Config, move_entry};
 
-/// CLI wrapper for aria_move library
+/// CLI wrapper for aria_move library.
+///
+/// Keep the CLI minimal: config is read from disk by Config::default(),
+/// CLI flags override those values. `--debug` is a convenient shorthand
+/// for `--log-level debug`.
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Move completed aria2 downloads safely (Rust)")]
 struct Args {
@@ -19,36 +23,72 @@ struct Args {
     /// Source path passed by aria2
     source_path: Option<PathBuf>,
 
-    /// Optional: override download base (for testing)
-    #[arg(long)]
+    /// Optional: override the download base (for testing)
+    #[arg(long, help = "Override the download base directory")]
     download_base: Option<PathBuf>,
 
-    /// Optional: override completed base (for testing)
-    #[arg(long)]
+    /// Optional: override the completed base (for testing)
+    #[arg(long, help = "Override the completed base directory")]
     completed_base: Option<PathBuf>,
+
+    /// Enable debug logging (equivalent to `--log-level debug`)
+    #[arg(short = 'd', long, help = "Enable debug logging (shorthand for --log-level debug)")]
+    debug: bool,
+
+    /// Set log level. One of: error, warn, info, debug, trace
+    #[arg(long, help = "Set log level: error, warn, info, debug, trace")]
+    log_level: Option<String>,
 }
 
-fn init_logging() {
+fn init_logging(level: Option<&str>) {
     let timer = LocalTime::rfc_3339();
+
+    let lvl = match level.map(|s| s.to_ascii_lowercase()).as_deref() {
+        Some("trace") => Level::TRACE,
+        Some("debug") => Level::DEBUG,
+        Some("warn") | Some("warning") => Level::WARN,
+        Some("error") => Level::ERROR,
+        _ => Level::INFO,
+    };
+
     tracing_subscriber::fmt()
         .with_timer(timer)
         .with_target(false)
         .compact()
+        .with_max_level(lvl)
         .init();
 }
 
 fn main() -> Result<()> {
-    init_logging();
-
     let args = Args::parse();
+
+    // Build config (may read XML). CLI args override config values.
+    let mut cfg = Config::default();
+    // don't move values out of `args` (we still use `args` for logging later).
+    if let Some(db) = args.download_base.as_ref() {
+        cfg.download_base = db.clone();
+    }
+    if let Some(cb) = args.completed_base.as_ref() {
+        cfg.completed_base = cb.clone();
+    }
+
+    // CLI log-level flags override the config/log file value.
+    if let Some(lvl) = args.log_level.as_ref() {
+        cfg.log_level = Some(lvl.clone());
+    } else if args.debug {
+        cfg.log_level = Some("debug".into());
+    }
+
+    // initialize logging with chosen level (config or default)
+    init_logging(cfg.log_level.as_deref());
+
     info!("Starting aria_move: {:?}", args);
 
-    let mut cfg = Config::default();
-    if let Some(db) = args.download_base {
-        cfg.download_base = db;
-    }
-    if let Some(cb) = args.completed_base {
-        cfg.completed_base = cb;
+    // Validate paths and permissions before proceeding.
+    if let Err(e) = cfg.validate() {
+        error!("Configuration validation failed: {}", e);
+        error!("Hint: check that download and completed directories exist and have correct permissions. Place config.xml in your config directory or set ARIA_MOVE_CONFIG to point to it.");
+        return Err(e.into());
     }
 
     // Resolve source path (try provided path first, else find recent)
@@ -63,7 +103,7 @@ fn main() -> Result<()> {
 
     match move_entry(&cfg, &src) {
         Ok(dest) => {
-            info!(source=%src.display(), dest=%dest.display(), "Move completed");
+            info!(source = %src.display(), dest = %dest.display(), "Move completed");
             Ok(())
         }
         Err(e) => {
