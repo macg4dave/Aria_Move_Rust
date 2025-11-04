@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use walkdir::WalkDir;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::config::Config;
 use crate::utils::{unique_destination, ensure_not_base, file_is_mutable, stable_file_probe};
@@ -43,7 +43,6 @@ pub fn move_entry(config: &Config, src: &Path) -> Result<PathBuf> {
     ensure_not_base(&config.download_base, src)?;
 
     if src.is_file() {
-        // prevent moving files that look like incomplete/in-use
         if file_is_mutable(src)? {
             bail!("Source file '{}' appears to be in-use or still being written", src.display());
         }
@@ -59,11 +58,14 @@ pub fn move_entry(config: &Config, src: &Path) -> Result<PathBuf> {
 pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
     ensure_not_base(&config.download_base, src)?;
 
-    // wait for size stabilization before moving — small best-effort probe
     stable_file_probe(src, Duration::from_millis(200), 3)?;
 
     let dest_dir = &config.completed_base;
-    fs::create_dir_all(dest_dir).with_context(|| format!("Failed to create destination dir {}", dest_dir.display()))?;
+    if !config.dry_run {
+        fs::create_dir_all(dest_dir).with_context(|| format!("Failed to create destination dir {}", dest_dir.display()))?;
+    } else {
+        info!(action = "mkdir -p", path = %dest_dir.display(), "dry-run");
+    }
 
     let file_name = src
         .file_name()
@@ -72,6 +74,11 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
 
     if dest.exists() {
         dest = unique_destination(&dest);
+    }
+
+    if config.dry_run {
+        info!(src = %src.display(), dest = %dest.display(), "dry-run: would move file");
+        return Ok(dest);
     }
 
     match try_atomic_move(src, &dest) {
@@ -96,7 +103,12 @@ pub fn move_dir(config: &Config, src_dir: &Path) -> Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("Source directory missing name: {}", src_dir.display()))?;
     let target = config.completed_base.join(src_name);
 
-    // Try fast rename
+    if config.dry_run {
+        info!(src = %src_dir.display(), dest = %target.display(), "dry-run: would move directory");
+        return Ok(target);
+    }
+
+    // Try fast rename first (works on same filesystem).
     if fs::rename(src_dir, &target).is_ok() {
         info!(src = %src_dir.display(), dest = %target.display(), "Renamed directory atomically");
         return Ok(target);
