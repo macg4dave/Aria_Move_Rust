@@ -4,8 +4,7 @@ use std::path::PathBuf;
 use tracing::{error, info, Level};
 use tracing_subscriber::fmt::time::LocalTime;
 
-use aria_move::{Config, move_entry};
-use aria_move::ensure_default_config_exists;
+use aria_move::{Config, move_entry, validate_paths, ensure_default_config_exists};
 
 /// CLI wrapper for aria_move library.
 ///
@@ -96,7 +95,7 @@ fn main() -> Result<()> {
     info!("Starting aria_move: {:?}", args);
 
     // Validate paths and permissions before proceeding.
-    if let Err(e) = cfg.validate() {
+    if let Err(e) = validate_paths(&cfg) {
         error!("Configuration validation failed: {}", e);
         error!("Hint: check that download and completed directories exist and have correct permissions. Place config.xml in your config directory or set ARIA_MOVE_CONFIG to point to it.");
         return Err(e.into());

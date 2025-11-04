@@ -14,8 +14,10 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "local-time"] }
 walkdir = "2.3"
 rayon = "1.7"
 tempfile = { version = "3", optional = true } # used by tests
-# small helpful crates
-serde = { version = "1.0", features = ["derive"], optional = true }
+
+# XML parsing via quick-xml + serde for robust config handling
+serde = { version = "1.0", features = ["derive"] }
+quick-xml = { version = "0.29", features = ["serialize"] }
 
 [dev-dependencies]
 tempfile = "3.6"
@@ -23,4 +25,4 @@ assert_fs = "1.0"
 
 [features]
 # Enable test helpers (optional)
-test-helpers = ["tempfile", "serde"]
+test-helpers = ["tempfile"]
