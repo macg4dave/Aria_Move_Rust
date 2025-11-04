@@ -467,3 +467,30 @@ mod tests {
         assert!(!src_dir.exists());
     }
 }
+
+/// Ensure a default config file exists when ARIA_MOVE_CONFIG is not set.
+///
+/// If ARIA_MOVE_CONFIG is set we do not create files. When the OS-appropriate
+/// default path is available and no config exists this will create a template
+/// config and return its path so callers (CLI) can inform the user.
+pub fn ensure_default_config_exists() -> Option<PathBuf> {
+    // If user pointed to an explicit config, don't create anything.
+    if env::var("ARIA_MOVE_CONFIG").is_ok() {
+        return None;
+    }
+
+    let cfg_path = default_config_path()?;
+    if cfg_path.exists() {
+        return None;
+    }
+
+    match create_template_config(&cfg_path) {
+        Ok(()) => Some(cfg_path),
+        Err(e) => {
+            // Best-effort: report creation failure to the caller via stderr.
+            // Logging may not be initialized yet.
+            eprintln!("Failed to create template config at {}: {}", cfg_path.display(), e);
+            None
+        }
+    }
+}

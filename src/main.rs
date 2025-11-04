@@ -5,6 +5,7 @@ use tracing::{error, info, Level};
 use tracing_subscriber::fmt::time::LocalTime;
 
 use aria_move::{Config, move_entry};
+use aria_move::ensure_default_config_exists;
 
 /// CLI wrapper for aria_move library.
 ///
@@ -61,6 +62,16 @@ fn init_logging(level: Option<&str>) {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+
+    // If there's no config file at the OS-default location, create a template
+    // and inform the user so they can edit it. Exit so the user can populate
+    // real values before the tool proceeds.
+    if let Some(path) = ensure_default_config_exists() {
+        println!("\nA template aria_move config was written to:\n  {}\n", path.display());
+        println!("Edit the file to set download_base, completed_base and optionally log_level, for example:\n\n<config>\n  <download_base>/path/to/incoming</download_base>\n  <completed_base>/path/to/completed</completed_base>\n  <log_level>info</log_level>\n</config>\n");
+        println!("Then re-run this command. To use a different location set ARIA_MOVE_CONFIG.\n");
+        return Ok(());
+    }
 
     // Build config (may read XML). CLI args override config values.
     let mut cfg = Config::default();
