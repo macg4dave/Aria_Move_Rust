@@ -2,9 +2,11 @@ use anyhow::{bail, Context, Result};
 use rayon::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
-use walkdir::WalkDir;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::process;
+use std::fs::OpenOptions;
 use tracing::{info, warn};
+use walkdir::WalkDir;
 
 use crate::config::Config;
 use crate::utils::{unique_destination, ensure_not_base, file_is_mutable, stable_file_probe};
@@ -87,8 +89,8 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
             Ok(dest)
         }
         Err(e) => {
-            warn!(error = %e, "Atomic rename failed, falling back to copy+remove");
-            fs::copy(src, &dest).with_context(|| format!("Copy failed {} -> {}", src.display(), dest.display()))?;
+            warn!(error = %e, "Atomic rename failed, falling back to safe copy+rename");
+            safe_copy_and_rename(src, &dest)?;
             fs::remove_file(src).with_context(|| format!("Failed to remove original file {}", src.display()))?;
             Ok(dest)
         }
@@ -157,10 +159,62 @@ pub fn move_dir(config: &Config, src_dir: &Path) -> Result<PathBuf> {
 /// strategies (windows move semantics, replace semantics) can be added by cfg.
 fn try_atomic_move(src: &Path, dest: &Path) -> std::io::Result<()> {
     // On most Unixes and Windows rename is atomic when on same FS.
-    fs::rename(src, dest)
+    fs::rename(src, dest)?;
+
+    let dest_dir = dest.parent().unwrap();
+    let dirf = OpenOptions::new().read(true).open(dest_dir)?;
+    dirf.sync_all()?;
+
+    Ok(())
 }
 
 /// Validate the configured paths (wrapper used by CLI).
 pub fn validate_paths(cfg: &Config) -> Result<()> {
     cfg.validate()
 }
+
+/// Copy src -> temp-in-dest-dir, fsync temp file, rename temp -> dest, fsync parent dir.
+/// This mitigates TOCTOU races and ensures the destination is durable when the function returns.
+pub(crate) fn safe_copy_and_rename(src: &Path, dest: &Path) -> Result<()> {
+    let dest_dir = dest.parent().ok_or_else(|| anyhow::anyhow!("Destination has no parent: {}", dest.display()))?;
+
+    // ensure dest_dir exists
+    fs::create_dir_all(dest_dir).with_context(|| format!("Failed to create dest dir {}", dest_dir.display()))?;
+
+    // create a unique temporary path in the destination directory
+    let pid = process::id();
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
+    let tmp_name = format!(".aria_move.tmp.{}.{}", pid, now);
+    let tmp_path = dest_dir.join(&tmp_name);
+
+    // copy to temp path
+    fs::copy(src, &tmp_path).with_context(|| format!("Copy to tmp failed {} -> {}", src.display(), tmp_path.display()))?;
+
+    // open temp and sync data to disk
+    let f = OpenOptions::new().read(true).write(true).open(&tmp_path)
+        .with_context(|| format!("Opening temp file for sync failed: {}", tmp_path.display()))?;
+    f.sync_all().with_context(|| format!("fsync(temp) failed: {}", tmp_path.display()))?;
+
+    // atomically rename temp -> dest
+    fs::rename(&tmp_path, dest).with_context(|| format!("Rename tmp -> dest failed {} -> {}", tmp_path.display(), dest.display()))?;
+
+    // sync destination directory to persist the rename
+    let dirf = OpenOptions::new().read(true).open(dest_dir)
+        .with_context(|| format!("Opening dest dir for sync failed: {}", dest_dir.display()))?;
+    dirf.sync_all().with_context(|| format!("fsync(dest_dir) failed: {}", dest_dir.display()))?;
+
+    Ok(())
+}
+
+// Usage in move_file fallback:
+//
+// match try_atomic_move(src, &dest) {
+//   Ok(()) => { ... }
+//   Err(e) => {
+//       warn!(error = %e, "Atomic rename failed, falling back to safe copy+rename");
+//       safe_copy_and_rename(src, &dest)?;
+//       // remove original src after successful copy+rename
+//       fs::remove_file(src).with_context(|| format!("Failed to remove original file {}", src.display()))?;
+//       Ok(dest)
+//   }
+// }

@@ -20,7 +20,9 @@ use tracing::{debug, error, info};
 use dirs::{config_dir, data_dir};
 
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{OpenOptionsExt as UnixOpenOptionsExt, PermissionsExt, MetadataExt};
+#[cfg(unix)]
+use libc;
 
 use crate::utils::is_writable_probe;
 
@@ -153,6 +155,40 @@ impl Config {
             bail!("Download and completed base must be different paths; both resolve to '{}'", db_real.display());
         }
 
+        // Unix-specific ownership & permission checks
+        #[cfg(unix)]
+        {
+            // download_base permissions
+            let db_meta = fs::metadata(&self.download_base).with_context(|| {
+                format!("Failed to stat download base '{}'", self.download_base.display())
+            })?;
+            let db_mode = db_meta.permissions().mode();
+            if db_mode & 0o022 != 0 {
+                bail!("Download base '{}' is group/world-writable; refuse to operate on insecure directory", self.download_base.display());
+            }
+            let db_uid = db_meta.uid();
+            if db_uid != unsafe { libc::geteuid() } {
+                bail!("Download base '{}' is not owned by current user (uid {})", self.download_base.display(), unsafe {
+                    libc::geteuid()
+                });
+            }
+
+            // completed_base permissions
+            let cb_meta = fs::metadata(&self.completed_base).with_context(|| {
+                format!("Failed to stat completed base '{}'", self.completed_base.display())
+            })?;
+            let cb_mode = cb_meta.permissions().mode();
+            if cb_mode & 0o022 != 0 {
+                bail!("Completed base '{}' is group/world-writable; refuse to operate on insecure directory", self.completed_base.display());
+            }
+            let cb_uid = cb_meta.uid();
+            if cb_uid != unsafe { libc::geteuid() } {
+                bail!("Completed base '{}' is not owned by current user (uid {})", self.completed_base.display(), unsafe {
+                    libc::geteuid()
+                });
+            }
+        }
+
         info!(
             "Config validated: download='{}' completed='{}' log_file='{}'",
             self.download_base.display(),
@@ -253,8 +289,34 @@ pub fn default_log_path() -> Option<PathBuf> {
     }
 }
 
+/// Return true if any existing ancestor of `path` is a symlink.
+/// We walk parents until we reach root or encounter an existing path; if that existing
+/// ancestor is a symlink we return true. Best-effort; IO errors are propagated.
+pub fn path_has_symlink_ancestor(path: &Path) -> io::Result<bool> {
+    let mut p = path.parent();
+    while let Some(anc) = p {
+        if anc.exists() {
+            let meta = fs::symlink_metadata(anc)?;
+            if meta.file_type().is_symlink() {
+                return Ok(true);
+            }
+        }
+        p = anc.parent();
+    }
+    Ok(false)
+}
+
 /// Create default template config file and parent directory (best-effort permissions).
+/// Uses O_NOFOLLOW + create_new on Unix to avoid following attacker-controlled symlinks.
 pub fn create_template_config(path: &Path) -> io::Result<()> {
+    if path_has_symlink_ancestor(path)? {
+        // refuse to create template if any existing ancestor is a symlink
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("Refusing to create config: ancestor of {} is a symlink", path.display()),
+        ));
+    }
+
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
         #[cfg(unix)]
@@ -265,7 +327,6 @@ pub fn create_template_config(path: &Path) -> io::Result<()> {
 
     let suggested_log = default_log_path().map(|p| p.display().to_string()).unwrap_or_else(|| "/path/to/aria_move.log".into());
 
-    // use "normal" as the default log level in the template
     let content = format!(
         "<config>\n  <download_base>{}</download_base>\n  <completed_base>{}</completed_base>\n  <log_level>normal</log_level>\n  <log_file>{}</log_file>\n</config>\n",
         DOWNLOAD_BASE_DEFAULT,
@@ -273,7 +334,21 @@ pub fn create_template_config(path: &Path) -> io::Result<()> {
         suggested_log
     );
 
-    fs::write(path, content)?;
+    #[cfg(unix)]
+    {
+        // open with create_new + O_NOFOLLOW + mode 0o600 to avoid symlink attacks
+        use std::fs::OpenOptions;
+        let mut opts = OpenOptions::new();
+        opts.write(true).create_new(true).mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        let mut f = opts.open(path)?;
+        use std::io::Write;
+        f.write_all(content.as_bytes())?;
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write(path, content)?;
+    }
+
     #[cfg(unix)]
     {
         let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
@@ -292,6 +367,13 @@ pub fn ensure_default_config_exists() -> Option<PathBuf> {
     if cfg_path.exists() {
         return None;
     }
+
+    // if any existing ancestor is a symlink, refuse to create the template (security)
+    if let Ok(true) = path_has_symlink_ancestor(&cfg_path) {
+        eprintln!("Refusing to create template config because an existing ancestor is a symlink: {}", cfg_path.display());
+        return None;
+    }
+
     match create_template_config(&cfg_path) {
         Ok(()) => Some(cfg_path),
         Err(e) => {
@@ -447,5 +529,40 @@ mod tests {
         assert_eq!(LogLevel::parse("debug"), Some(LogLevel::Debug));
         assert_eq!(LogLevel::parse("trace"), Some(LogLevel::Debug));
         assert_eq!(LogLevel::parse("UNKNOWN"), None);
+    }
+
+    #[test]
+    fn ensure_default_config_refuses_symlinked_parent() {
+        use std::os::unix::fs as unix_fs;
+        let dir = tempdir().unwrap();
+        let home = dir.path().to_path_buf();
+        std::env::set_var("HOME", &home);
+        std::env::remove_var("ARIA_MOVE_CONFIG");
+
+        // create an external dir where we would NOT like files to be created
+        let outside = tempdir().unwrap();
+
+        // create a symlink at $HOME/.config/aria_move -> outside.path()
+        let config_parent = home.join(".config").join("aria_move");
+        let config_parent_parent = config_parent.parent().unwrap();
+        fs::create_dir_all(&config_parent_parent).unwrap();
+
+        #[cfg(unix)]
+        {
+            unix_fs::symlink(outside.path(), &config_parent).unwrap();
+        }
+
+        // default_config_path should point to $HOME/.config/aria_move/config.xml
+        let p = default_config_path().expect("default path must exist");
+        // ensure it does not exist yet
+        if p.exists() { let _ = fs::remove_file(&p); }
+
+        // ensure_default_config_exists must refuse because parent is a symlink -> return None
+        let created = ensure_default_config_exists();
+        assert!(created.is_none());
+
+        // ensure outside dir still empty (no config file written there)
+        let outside_entries = fs::read_dir(outside.path()).unwrap().next();
+        assert!(outside_entries.is_none());
     }
 }

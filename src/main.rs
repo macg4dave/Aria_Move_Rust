@@ -12,10 +12,10 @@ use tracing_subscriber::Layer;
 use tracing_appender::non_blocking::WorkerGuard;
 use chrono::Local;
 use std::fmt as stdfmt;
-use std::fs::OpenOptions;
 
-use aria_move::{Config, LogLevel, move_entry, validate_paths, ensure_default_config_exists, default_config_path};
+use aria_move::{Config, LogLevel, move_entry, validate_paths, ensure_default_config_exists, default_config_path, path_has_symlink_ancestor};
 use std::env;
+use std::os::unix::fs::OpenOptionsExt as MainOpenOptionsExt; // keep local alias for clarity
 
 /// CLI wrapper for aria_move library.
 ///
@@ -93,14 +93,43 @@ fn init_logging_level(lvl: &LogLevel, log_file: Option<&std::path::Path>) -> Res
 
     // If file logging requested, create file layer and init subscriber with both layers.
     if let Some(path) = log_file {
+        // security: refuse to create/open log file if any existing ancestor is a symlink
+        match path_has_symlink_ancestor(path) {
+            Ok(true) => {
+                eprintln!("Refusing to enable file logging: existing ancestor of {} is a symlink; proceeding without file logging.", path.display());
+                registry().with(stdout_layer).init();
+                return Ok(None);
+            }
+            Err(e) => {
+                eprintln!("Error checking log path {} for symlinks: {}; proceeding without file logging.", path.display(), e);
+                registry().with(stdout_layer).init();
+                return Ok(None);
+            }
+            Ok(false) => { /* ok to proceed */ }
+        }
+
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).ok();
         }
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .map_err(|e| anyhow::anyhow!("Failed to open log file {}: {}", path.display(), e))?;
+
+        // open file safely: on Unix use O_NOFOLLOW and restrictive mode
+        #[cfg(unix)]
+        let file = {
+            use std::fs::OpenOptions;
+            let mut opts = OpenOptions::new();
+            opts.create(true).append(true);
+            // set mode 0o600 and O_NOFOLLOW to avoid symlink attacks
+            opts.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+            opts.open(path).map_err(|e| anyhow::anyhow!("Failed to open log file {}: {}", path.display(), e))?
+        };
+        #[cfg(not(unix))]
+        let file = {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .map_err(|e| anyhow::anyhow!("Failed to open log file {}: {}", path.display(), e))?
+        };
 
         // non-blocking writer + guard
         let (non_blocking_writer, guard) = tracing_appender::non_blocking(file);
