@@ -2,10 +2,10 @@
 
 use std::fs;
 use std::io::Write;
+use std::os::unix::fs as unix_fs;
 use std::thread;
 use std::time::Duration;
 use tempfile::tempdir;
-use std::os::unix::fs as unix_fs;
 
 #[test]
 fn safe_copy_and_rename_with_concurrent_symlink_creation() {
@@ -35,7 +35,8 @@ fn safe_copy_and_rename_with_concurrent_symlink_creation() {
     });
 
     // perform safe copy+rename (should produce file with src content)
-    aria_move::fs_ops::safe_copy_and_rename(&src, &dest).expect("safe_copy_and_rename should succeed");
+    aria_move::fs_ops::safe_copy_and_rename(&src, &dest)
+        .expect("safe_copy_and_rename should succeed");
     handle.join().unwrap();
 
     // If a symlink ended up at dest (concurrent actor won), consider the run inconclusive and skip strict asserts.
@@ -61,6 +62,10 @@ fn safe_copy_and_rename_with_concurrent_symlink_creation() {
     // ensure no tmp files remain
     for entry in fs::read_dir(&dest_dir).unwrap() {
         let name = entry.unwrap().file_name().into_string().unwrap();
-        assert!(!name.starts_with(".aria_move.tmp."), "tmp file left behind: {}", name);
+        assert!(
+            !name.starts_with(".aria_move.tmp."),
+            "tmp file left behind: {}",
+            name
+        );
     }
 }

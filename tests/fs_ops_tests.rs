@@ -1,7 +1,7 @@
+use aria_move::fs_ops::safe_copy_and_rename;
 use std::fs;
 use std::io::Write;
 use tempfile::tempdir;
-use aria_move::fs_ops::safe_copy_and_rename;
 
 #[test]
 fn safe_copy_and_rename_creates_destination_and_cleans_tmp() {
@@ -23,10 +23,15 @@ fn safe_copy_and_rename_creates_destination_and_cleans_tmp() {
     assert_eq!(content, "hello world");
 
     // tmp files (hidden) should not remain
-    let entries = fs::read_dir(&dest_dir).unwrap().map(|e| e.unwrap().file_name()).collect::<Vec<_>>();
+    let entries = fs::read_dir(&dest_dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect::<Vec<_>>();
     assert!(entries.iter().any(|n| n == "dest.txt"));
     // ensure no .aria_move.tmp.* files
-    assert!(entries.iter().all(|n| !n.to_string_lossy().starts_with(".aria_move.tmp.")));
+    assert!(entries
+        .iter()
+        .all(|n| !n.to_string_lossy().starts_with(".aria_move.tmp.")));
 }
 
 #[test]

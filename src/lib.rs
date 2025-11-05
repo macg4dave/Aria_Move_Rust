@@ -1,17 +1,14 @@
 //! aria_move library — modular entry points.
 pub mod config;
-pub mod fs_ops;
-pub mod utils;
+pub mod fs_ops; // now a directory module
 pub mod shutdown;
+pub mod utils;
 
-// re-export the public API from modules at the crate root
+// re-exports remain the same
 pub use config::{
-    Config,
-    LogLevel,
-    ensure_default_config_exists,
-    default_config_path,
-    default_log_path,
-    load_config_from_xml,
-    path_has_symlink_ancestor,
+    default_config_path, default_log_path, ensure_default_config_exists, load_config_from_xml,
+    path_has_symlink_ancestor, Config, LogLevel,
 };
-pub use fs_ops::{move_dir, move_entry, move_file, resolve_source_path, validate_paths, safe_copy_and_rename};
+pub use fs_ops::{
+    move_dir, move_entry, move_file, resolve_source_path, safe_copy_and_rename, validate_paths,
+};

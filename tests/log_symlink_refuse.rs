@@ -1,9 +1,9 @@
 #![cfg(unix)]
 
+use std::env;
 use std::fs;
 use std::os::unix::fs as unix_fs;
 use tempfile::tempdir;
-use std::env;
 
 #[test]
 fn log_file_symlink_parent_refused() {
@@ -20,5 +20,8 @@ fn log_file_symlink_parent_refused() {
 
     // compute default log path and assert path_has_symlink_ancestor detects the symlink
     let log_path = aria_move::default_log_path().expect("default_log_path present");
-    assert!(aria_move::path_has_symlink_ancestor(&log_path).unwrap(), "symlink ancestor should be detected");
+    assert!(
+        aria_move::path_has_symlink_ancestor(&log_path).unwrap(),
+        "symlink ancestor should be detected"
+    );
 }
