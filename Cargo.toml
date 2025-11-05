@@ -10,7 +10,7 @@ description = "A robust Rust replacement for aria_move.sh — atomic moves and s
 anyhow = "1.0"
 clap = { version = "4.2", features = ["derive"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["fmt", "local-time"] }
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "json"] }
 tracing-appender = "0.2"
 walkdir = "2.3"
 rayon = "1.7"

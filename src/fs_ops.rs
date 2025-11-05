@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use filetime::{FileTime, set_file_times};
 use rayon::prelude::*;
 use std::fs;
@@ -104,18 +104,20 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
             Ok(dest)
         }
         Err(e) => {
-            // Provide a hint about why rename failed.
+            // Extract underlying io::Error (if present) to produce better hints.
             #[cfg(unix)]
-            let hint: &str = match e.raw_os_error() {
-                Some(libc::EXDEV) => "cross-filesystem; will copy instead",
-                Some(libc::EACCES) | Some(libc::EPERM) => "permission denied; check destination perms",
+            let hint: &str = match e.downcast_ref::<io::Error>().and_then(|ioe| ioe.raw_os_error()) {
+                Some(code) if code == libc::EXDEV => "cross-filesystem; will copy instead",
+                Some(code) if code == libc::EACCES || code == libc::EPERM => "permission denied; check destination perms",
                 _ => "falling back to copy",
             };
+
             #[cfg(not(unix))]
-            let hint: &str = match e.kind() {
-                io::ErrorKind::PermissionDenied => "permission denied; check destination perms",
+            let hint: &str = match e.downcast_ref::<io::Error>().map(|ioe| ioe.kind()) {
+                Some(io::ErrorKind::PermissionDenied) => "permission denied; check destination perms",
                 _ => "falling back to copy",
             };
+
             warn!(error = %e, hint, "Atomic rename failed, using safe copy+rename");
             safe_copy_and_rename_with_metadata(src, &dest, config.preserve_metadata)?;
             fs::remove_file(src).map_err(io_error_with_help("remove original file", src))?;
@@ -190,22 +192,22 @@ pub fn move_dir(config: &Config, src_dir: &Path) -> Result<PathBuf> {
     Ok(target)
 }
 
-/// Platform hook: try atomic move. This is intentionally small so platform-specific
-/// strategies (windows move semantics, replace semantics) can be added by cfg.
-fn try_atomic_move(src: &Path, dest: &Path) -> std::io::Result<()> {
+/// Platform hook: try atomic move. Return anyhow::Result so callers can attach context/hints.
+fn try_atomic_move(src: &Path, dest: &Path) -> Result<()> {
     // On most Unixes and Windows rename is atomic when on same FS.
     #[cfg(windows)]
     {
         // On Windows std::fs::rename does not overwrite dest — remove it first.
         if dest.exists() {
-            fs::remove_file(&dest).map_err(io_error_with_help("remove existing destination before rename", &dest))?;
+            fs::remove_file(dest).map_err(io_error_with_help("remove existing destination before rename", dest))?;
         }
     }
-    fs::rename(src, &dest).map_err(io_error_with_help("rename source to destination", &dest))?;
+    // perform rename; map io errors to anyhow with helpful hints
+    fs::rename(src, dest).map_err(io_error_with_help("rename source to destination", dest))?;
 
     let dest_dir = dest.parent().unwrap();
-    let dirf = OpenOptions::new().read(true).open(dest_dir)?;
-    dirf.sync_all()?;
+    let dirf = OpenOptions::new().read(true).open(dest_dir).map_err(io_error_with_help("open destination directory for sync", dest_dir))?;
+    dirf.sync_all().map_err(io_error_with_help("fsync destination directory", dest_dir))?;
 
     Ok(())
 }
@@ -273,42 +275,44 @@ pub fn maybe_preserve_metadata(src: &Path, dest: &Path, preserve: bool) -> Resul
         return Ok(());
     }
 
-    // Times: preserve mtime and atime (best-effort)
-    if let Ok(meta) = fs::metadata(src) {
-        #[allow(unused_mut)]
-        let mut mtime = None;
-        #[allow(unused_mut)]
-        let mut atime = None;
+    // gather source metadata
+    let meta = match fs::metadata(src) {
+        Ok(m) => m,
+        Err(e) => return Err(anyhow::anyhow!("stat {} failed: {}", src.display(), e)),
+    };
 
+    // compute access & modify times in a platform-appropriate way
+    let (at_opt, mt_opt) = {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
-            mtime = Some(FileTime::from_unix_time(meta.mtime(), meta.mtime_nsec() as u32));
-            atime = Some(FileTime::from_unix_time(meta.atime(), meta.atime_nsec() as u32));
+            let mt = FileTime::from_unix_time(meta.mtime(), meta.mtime_nsec() as u32);
+            let at = FileTime::from_unix_time(meta.atime(), meta.atime_nsec() as u32);
+            (Some(at), Some(mt))
         }
         #[cfg(not(unix))]
         {
-            if let Ok(modified) = meta.modified() {
-                mtime = Some(FileTime::from_system_time(modified));
-            }
-            if let Ok(accessed) = meta.accessed() {
-                atime = Some(FileTime::from_system_time(accessed));
-            }
+            let at = meta.accessed().ok().map(FileTime::from_system_time);
+            let mt = meta.modified().ok().map(FileTime::from_system_time);
+            (at, mt)
         }
+    };
 
-        if let (Some(at), Some(mt)) = (atime, mtime) {
-            let _ = set_file_times(dest, at, mt);
-        }
+    if let (Some(at), Some(mt)) = (at_opt, mt_opt) {
+        let _ = set_file_times(dest, at, mt);
     }
 
     // Permissions: unix-only (copy mode bits)
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if let (Ok(src_meta), Ok(dest_meta)) = (fs::metadata(src), fs::metadata(dest)) {
-            let mut perms = dest_meta.permissions();
-            perms.set_mode(src_meta.permissions().mode() & 0o777);
-            let _ = fs::set_permissions(dest, perms);
+        if let Ok(src_meta) = fs::metadata(src) {
+            let src_mode = src_meta.permissions().mode() & 0o777;
+            if let Ok(dest_meta) = fs::metadata(dest) {
+                let mut perms = dest_meta.permissions();
+                perms.set_mode(src_mode);
+                let _ = fs::set_permissions(dest, perms);
+            }
         }
     }
 
@@ -319,7 +323,7 @@ pub fn maybe_preserve_metadata(src: &Path, dest: &Path, preserve: bool) -> Resul
 /// The lock is released when this value is dropped. We also try to remove the
 /// lock file on drop (best-effort).
 struct MoveLock {
-    file: std::fs::File,
+    _file: std::fs::File, // renamed to silence dead_code warning; retained for RAII
     path: PathBuf,
 }
 
@@ -357,11 +361,12 @@ fn acquire_move_lock(src: &Path) -> Result<MoveLock> {
         .create(true)
         .read(true)
         .write(true)
+        .truncate(false) // ensure we don't accidentally truncate an existing lock file
         .open(&lock_path)
         .map_err(io_error_with_help("open lock file", &lock_path))?;
 
     match file.try_lock_exclusive() {
-        Ok(()) => Ok(MoveLock { file, path: lock_path }),
+        Ok(()) => Ok(MoveLock { _file: file, path: lock_path }),
         Err(e) => {
             // WouldBlock => already locked by another process
             if e.kind() == std::io::ErrorKind::WouldBlock {

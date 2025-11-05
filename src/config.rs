@@ -14,13 +14,13 @@ use serde::Deserialize;
 use std::env;
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
 use std::time::Duration;
+use std::path::{Path, PathBuf};
 use tracing::{debug, error, info};
 use dirs::{config_dir, data_dir};
 
 #[cfg(unix)]
-use std::os::unix::fs::{OpenOptionsExt as UnixOpenOptionsExt, PermissionsExt, MetadataExt};
+use std::os::unix::fs::{OpenOptionsExt as UnixOpenOptionsExt, PermissionsExt};
 #[cfg(unix)]
 use libc;
 
@@ -59,31 +59,24 @@ pub struct Config {
     pub download_base: PathBuf,
     pub completed_base: PathBuf,
     pub log_level: LogLevel,
-    pub log_file: Option<PathBuf>, // path to a file where the program will write logs
-    pub dry_run: bool,             // if true, operations are logged but not performed
+    pub log_file: Option<PathBuf>,
+    pub dry_run: bool,
     pub preserve_metadata: bool,
+    // how far back to consider "recent" files when auto-resolving source
+    pub recent_window: Duration,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        if let Some((db, cb, lvl, lfile)) = load_config_from_xml() {
-            Self {
-                download_base: db,
-                completed_base: cb,
-                log_level: lvl.unwrap_or_default(),
-                log_file: lfile,
-                dry_run: false,
-                preserve_metadata: false,
-            }
-        } else {
-            Self {
-                download_base: PathBuf::from(DOWNLOAD_BASE_DEFAULT),
-                completed_base: PathBuf::from(COMPLETED_BASE_DEFAULT),
-                log_level: LogLevel::default(),
-                log_file: default_log_path(),
-                dry_run: false,
-                preserve_metadata: false,
-            }
+        Self {
+            download_base: PathBuf::from(DOWNLOAD_BASE_DEFAULT),
+            completed_base: PathBuf::from(COMPLETED_BASE_DEFAULT),
+            log_level: LogLevel::Normal,
+            log_file: default_log_path(),
+            dry_run: false,
+            preserve_metadata: false,
+           // default to 5 minutes of recency
+           recent_window: Duration::from_secs(60 * 5),
         }
     }
 }
@@ -101,6 +94,8 @@ impl Config {
             log_file: default_log_path(),
             dry_run: false,
             preserve_metadata: false,
+            // use the incoming parameter rather than ignoring it
+            recent_window,
         }
     }
 
@@ -240,6 +235,7 @@ impl Config {
 }
 
 /// Struct mirroring the XML config for deserialization.
+#[allow(dead_code)] // fields are only populated/deserialized by serde at runtime
 #[derive(Debug, Deserialize)]
 #[serde(rename = "config")]
 #[serde(deny_unknown_fields)]
@@ -256,13 +252,20 @@ struct XmlConfig {
     #[serde(rename = "log_file")]
     log_file: Option<String>,
 
-    // optional: preserve metadata (permissions/mtime) when moving (default false)
     #[serde(rename = "preserve_metadata")]
     preserve_metadata: Option<bool>,
+
+    // optional override of recent_window in seconds
+    #[serde(rename = "recent_window_seconds")]
+    recent_window_seconds: Option<u64>,
 }
 
+// Reduce visual complexity of the return type used by load_config_from_xml().
+type LoadedConfig = (PathBuf, PathBuf, Option<LogLevel>, Option<PathBuf>, Duration, bool);
+
 /// Read config from XML. OS-aware default path used if ARIA_MOVE_CONFIG not set.
-fn load_config_from_xml() -> Option<(PathBuf, PathBuf, Option<LogLevel>, Option<PathBuf>)> {
+#[allow(dead_code)]
+pub fn load_config_from_xml() -> Option<LoadedConfig> {
     let env_path = env::var("ARIA_MOVE_CONFIG").ok().map(PathBuf::from);
 
     // Use `?` to propagate None; clearer and idiomatic
@@ -301,6 +304,11 @@ fn load_config_from_xml() -> Option<(PathBuf, PathBuf, Option<LogLevel>, Option<
     let completed_base = parsed.completed_base.map(PathBuf::from);
     let log_level = parsed.log_level.and_then(|s| LogLevel::parse(&s));
     let log_file = parsed.log_file.map(PathBuf::from);
+    let recent_window = parsed
+        .recent_window_seconds
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::from_secs(60 * 5));
+    let preserve_metadata = parsed.preserve_metadata.unwrap_or(false);
 
     if download_base.is_none() && completed_base.is_none() && log_level.is_none() && log_file.is_none() {
         return None;
@@ -311,6 +319,8 @@ fn load_config_from_xml() -> Option<(PathBuf, PathBuf, Option<LogLevel>, Option<
         completed_base.unwrap_or_else(|| PathBuf::from(COMPLETED_BASE_DEFAULT)),
         log_level,
         log_file.or_else(default_log_path),
+        recent_window,
+        preserve_metadata,
     ))
 }
 
@@ -360,12 +370,12 @@ pub fn path_has_symlink_ancestor(path: &Path) -> io::Result<bool> {
 
 /// Create default template config file and parent directory (best-effort permissions).
 /// Uses O_NOFOLLOW + create_new on Unix to avoid following attacker-controlled symlinks.
-pub fn create_template_config(path: &Path) -> io::Result<()> {
+pub fn create_template_config(path: &Path) -> Result<()> {
     if path_has_symlink_ancestor(path)? {
         // refuse to create template if any existing ancestor is a symlink
-        return Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            format!("Refusing to create config: ancestor of {} is a symlink", path.display()),
+        return Err(anyhow::anyhow!(
+            "Refusing to create config: ancestor of {} is a symlink",
+            path.display()
         ));
     }
 
@@ -440,6 +450,7 @@ mod tests {
     use super::*;
     use std::fs;
     use std::io::Write;
+    use std::time::Duration;
     use tempfile::tempdir;
 
     #[test]
@@ -463,11 +474,13 @@ mod tests {
         std::env::remove_var("ARIA_MOVE_CONFIG");
 
         assert!(parsed.is_some());
-        let (db, cb, lvl, lf) = parsed.unwrap();
+        let (db, cb, lvl, lf, recent_window, preserve_metadata) = parsed.unwrap();
         assert_eq!(db, PathBuf::from("/tmp/incoming"));
         assert_eq!(cb, PathBuf::from("/tmp/completed"));
         assert_eq!(lvl, Some(LogLevel::Debug));
         assert_eq!(lf, Some(PathBuf::from("/tmp/aria.log")));
+        assert_eq!(recent_window, Duration::from_secs(60 * 5));
+        assert_eq!(preserve_metadata, false);
     }
 
     #[test]
@@ -488,12 +501,14 @@ mod tests {
         std::env::remove_var("ARIA_MOVE_CONFIG");
 
         assert!(parsed.is_some());
-        let (db, cb, lvl, lf) = parsed.unwrap();
+        let (db, cb, lvl, lf, recent_window, preserve_metadata) = parsed.unwrap();
         assert_eq!(db, PathBuf::from(DOWNLOAD_BASE_DEFAULT));
         assert_eq!(cb, PathBuf::from(COMPLETED_BASE_DEFAULT));
         // "trace" maps to Debug in our parsing
         assert_eq!(lvl, Some(LogLevel::Debug));
         assert!(lf.is_some(), "default_log_path should provide a fallback log_file");
+        assert_eq!(recent_window, Duration::from_secs(60 * 5));
+        assert_eq!(preserve_metadata, false);
     }
 
     #[test]

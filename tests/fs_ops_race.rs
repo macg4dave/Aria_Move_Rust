@@ -39,7 +39,7 @@ fn safe_copy_and_rename_with_concurrent_symlink_creation() {
     handle.join().unwrap();
 
     // If a symlink ended up at dest (concurrent actor won), consider the run inconclusive and skip strict asserts.
-    let symlink_created = match std::os::unix::fs::symlink_metadata(&dest) {
+    let symlink_created = match fs::symlink_metadata(&dest) {
         Ok(m) => m.file_type().is_symlink(),
         Err(_) => {
             // If metadata can't be read, fail the test to surface IO errors.

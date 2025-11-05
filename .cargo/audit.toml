@@ -1,20 +1,8 @@
 # Fail the job on vulnerabilities.
-# Keep “yanked” as informational (don’t fail build).
-[advisories]
-# Explicitly list which informational warnings to show;
-# omit "yanked" so it won’t fail the build.
-informational_warnings = ["unmaintained", "unsound"]
-ignore = []  # add specific RUSTSEC-* IDs here if needed
+# Keep “yanked” as informational (don’t fail the build).
 
-[output]
-quiet = false
-json = false
-```# filepath: /Users/dave/github/aria_move_rust/Aria_Move_Rust/.cargo/audit.toml
-# Fail the job on vulnerabilities.
-# Keep “yanked” as informational (don’t fail build).
 [advisories]
-# Explicitly list which informational warnings to show;
-# omit "yanked" so it won’t fail the build.
+# Show some informational warnings but fail on real advisories.
 informational_warnings = ["unmaintained", "unsound"]
 ignore = []  # add specific RUSTSEC-* IDs here if needed
 

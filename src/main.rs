@@ -3,21 +3,25 @@ use clap::Parser;
 use std::path::PathBuf;
 use tracing::{error, info};
 use tracing_subscriber::fmt::time::FormatTime;
-use tracing_subscriber::fmt;
-use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry;
 use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::Layer;
-use tracing_appender::non_blocking::WorkerGuard;
-use chrono::Local;
-use std::fmt as stdfmt;
+use tracing_subscriber::layer::SubscriberExt; // needed for `.with(...)` on registries
 use std::sync::{Arc, Mutex};
 use aria_move::shutdown;
 
-use aria_move::{Config, LogLevel, move_entry, validate_paths, ensure_default_config_exists, default_config_path, path_has_symlink_ancestor};
+use aria_move::{Config, LogLevel, move_entry, validate_paths, ensure_default_config_exists, default_config_path, load_config_from_xml, path_has_symlink_ancestor};
 use std::env;
-use std::os::unix::fs::OpenOptionsExt as MainOpenOptionsExt; // keep local alias for clarity
+use ctrlc;
+#[cfg(unix)]
+use libc;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+use std::fmt as stdfmt; // make sure this import exists
+
+use tracing_appender::non_blocking::WorkerGuard;
+use chrono::Local;
 
 /// CLI wrapper for aria_move library.
 ///
@@ -97,28 +101,38 @@ fn init_logging_level(
         LogLevel::Debug => LevelFilter::TRACE,
     };
 
+    // Build an EnvFilter from a string level so we can attach it at registry-level
+    let level_str = match level_filter {
+        LevelFilter::ERROR => "error",
+        LevelFilter::WARN => "warn",
+        LevelFilter::INFO => "info",
+        LevelFilter::DEBUG => "debug",
+        LevelFilter::TRACE => "trace",
+        _ => "info",
+    };
+    let env_filter = EnvFilter::new(level_str);
+
     // Branch on JSON vs pretty to avoid mixed generic types.
     if json {
         // stdout JSON layer
         let stdout_layer = tsfmt::layer()
-            .json()
+            .event_format(tsfmt::format().json())
             .with_timer(LocalHumanTime)
             .with_level(true)
-            .with_target(false)
-            .with_filter(level_filter);
+            .with_target(false);
 
         // If file logging requested, add a JSON file layer as well.
         if let Some(path) = log_file {
             // security: refuse file logging if any existing ancestor is a symlink
             match path_has_symlink_ancestor(path) {
                 Ok(true) => {
-                    eprintln!("Refusing to enable file logging: existing ancestor of {} is a symlink; proceeding without file logging.", path.display());
-                    registry().with(stdout_layer).init();
+                    eprintln!("Refusing to enable file logging: ancestor of {} is a symlink; proceeding without file logging.", path.display());
+                    registry().with(env_filter).with(stdout_layer).init();
                     return Ok(None);
                 }
                 Err(e) => {
                     eprintln!("Error checking log path {} for symlinks: {}; proceeding without file logging.", path.display(), e);
-                    registry().with(stdout_layer).init();
+                    registry().with(env_filter).with(stdout_layer).init();
                     return Ok(None);
                 }
                 Ok(false) => {}
@@ -132,7 +146,9 @@ fn init_logging_level(
             #[cfg(unix)]
             let file = {
                 let mut opts = std::fs::OpenOptions::new();
-                opts.create(true).append(true).mode(0o600).custom_flags(libc::O_NOFOLLOW);
+                opts.create(true).append(true);
+                opts.mode(0o600);
+                opts.custom_flags(libc::O_NOFOLLOW);
                 opts.open(path).map_err(|e| anyhow::anyhow!("Failed to open log file {}: {}", path.display(), e))?
             };
             #[cfg(not(unix))]
@@ -147,18 +163,17 @@ fn init_logging_level(
             let (writer, guard) = tracing_appender::non_blocking(file);
 
             let file_layer = tsfmt::layer()
-                .json()
+                .event_format(tsfmt::format().json())
                 .with_timer(LocalHumanTime)
                 .with_level(true)
                 .with_target(false)
-                .with_writer(writer)
-                .with_filter(level_filter);
+                .with_writer(writer);
 
-            registry().with(stdout_layer).with(file_layer).init();
+            registry().with(env_filter).with(stdout_layer).with(file_layer).init();
             return Ok(Some(guard));
         } else {
             // stdout only (JSON)
-            registry().with(stdout_layer).init();
+            registry().with(env_filter).with(stdout_layer).init();
             return Ok(None);
         }
     } else {
@@ -167,20 +182,19 @@ fn init_logging_level(
             .with_timer(LocalHumanTime)
             .with_level(true)
             .with_target(false)
-            .compact()
-            .with_filter(level_filter);
+            .compact();
 
         if let Some(path) = log_file {
             // security: refuse file logging if any existing ancestor is a symlink
             match path_has_symlink_ancestor(path) {
                 Ok(true) => {
-                    eprintln!("Refusing to enable file logging: existing ancestor of {} is a symlink; proceeding without file logging.", path.display());
-                    registry().with(stdout_layer).init();
+                    eprintln!("Refusing to enable file logging: ancestor of {} is a symlink; proceeding without file logging.", path.display());
+                    registry().with(env_filter).with(stdout_layer).init();
                     return Ok(None);
                 }
                 Err(e) => {
                     eprintln!("Error checking log path {} for symlinks: {}; proceeding without file logging.", path.display(), e);
-                    registry().with(stdout_layer).init();
+                    registry().with(env_filter).with(stdout_layer).init();
                     return Ok(None);
                 }
                 Ok(false) => {}
@@ -193,7 +207,9 @@ fn init_logging_level(
             #[cfg(unix)]
             let file = {
                 let mut opts = std::fs::OpenOptions::new();
-                opts.create(true).append(true).mode(0o600).custom_flags(libc::O_NOFOLLOW);
+                opts.create(true).append(true);
+                opts.mode(0o600);
+                opts.custom_flags(libc::O_NOFOLLOW);
                 opts.open(path).map_err(|e| anyhow::anyhow!("Failed to open log file {}: {}", path.display(), e))?
             };
             #[cfg(not(unix))]
@@ -212,13 +228,12 @@ fn init_logging_level(
                 .with_level(true)
                 .with_target(false)
                 .compact()
-                .with_writer(writer)
-                .with_filter(level_filter);
+                .with_writer(writer);
 
-            registry().with(stdout_layer).with(file_layer).init();
+            registry().with(env_filter).with(stdout_layer).with(file_layer).init();
             return Ok(Some(guard));
         } else {
-            registry().with(stdout_layer).init();
+            registry().with(env_filter).with(stdout_layer).init();
             return Ok(None);
         }
     }
@@ -261,34 +276,31 @@ fn main() -> Result<()> {
 
     // Build config (may read XML). CLI args override config values.
     let mut cfg = Config::default();
-    if let Some(db) = args.download_base.as_ref() {
-        cfg.download_base = db.clone();
-    }
-    if let Some(cb) = args.completed_base.as_ref() {
-        cfg.completed_base = cb.clone();
-    }
 
-    // logging level: parse CLI string into LogLevel, or use --debug as shorthand.
-    if let Some(lvl_str) = args.log_level.as_ref() {
-        if let Some(parsed) = LogLevel::parse(lvl_str) {
-            cfg.log_level = parsed;
-        } else {
-            eprintln!("Unknown log level '{}', using '{:?}'", lvl_str, cfg.log_level);
+    // prefer config file values unless CLI overrides them
+    if let Some((db, cb, lvl, lf, recent_window, preserve_metadata)) = load_config_from_xml() {
+        // only adopt file values when CLI didn't provide them
+        if args.download_base.is_none() { cfg.download_base = db; }
+        if args.completed_base.is_none() { cfg.completed_base = cb; }
+        if args.log_level.is_none() {
+            if let Some(l) = lvl { cfg.log_level = l; }
         }
-    } else if args.debug {
-        cfg.log_level = LogLevel::Debug;
+        if cfg.log_file.is_none() {
+            cfg.log_file = lf;
+        }
+        // file settings (still overridable via CLI flags)
+        cfg.recent_window = recent_window;
+        cfg.preserve_metadata = preserve_metadata;
     }
 
-    // dry-run propagation
-    if args.dry_run {
-        cfg.dry_run = true;
-        println!("Running in dry-run mode: no filesystem changes will be made.");
+    // then apply CLI overrides (so CLI wins)
+    if let Some(db) = args.download_base.as_ref() { cfg.download_base = db.clone(); }
+    if let Some(cb) = args.completed_base.as_ref() { cfg.completed_base = cb.clone(); }
+    if let Some(lvl_str) = args.log_level.as_ref() {
+        if let Some(parsed) = LogLevel::parse(lvl_str) { cfg.log_level = parsed; }
     }
-
-    // preserve_metadata propagation
-    if args.preserve_metadata {
-        cfg.preserve_metadata = true;
-    }
+    if args.preserve_metadata { cfg.preserve_metadata = true; }
+    if args.dry_run { cfg.dry_run = true; }
 
     // initialize logging and capture the guard so we can drop it on signal
     let guard_opt = init_logging_level(&cfg.log_level, cfg.log_file.as_deref(), args.json).map_err(|e| {
@@ -351,9 +363,12 @@ fn main() -> Result<()> {
     })();
 
     // Ensure log appender is flushed/shutdown before exit so file logs are complete.
-    if let Some(guard) = guard_opt {
-        // drop the guard to allow background worker to flush and shut down
-        drop(guard);
+    {
+        if let Ok(mut guard_opt) = guard_slot.lock() {
+            if guard_opt.is_some() {
+                let _ = guard_opt.take();
+            }
+        }
     }
 
     result
