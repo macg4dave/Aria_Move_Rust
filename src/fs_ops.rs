@@ -175,7 +175,7 @@ pub fn validate_paths(cfg: &Config) -> Result<()> {
 
 /// Copy src -> temp-in-dest-dir, fsync temp file, rename temp -> dest, fsync parent dir.
 /// This mitigates TOCTOU races and ensures the destination is durable when the function returns.
-pub(crate) fn safe_copy_and_rename(src: &Path, dest: &Path) -> Result<()> {
+pub fn safe_copy_and_rename(src: &Path, dest: &Path) -> Result<()> {
     let dest_dir = dest.parent().ok_or_else(|| anyhow::anyhow!("Destination has no parent: {}", dest.display()))?;
 
     // ensure dest_dir exists

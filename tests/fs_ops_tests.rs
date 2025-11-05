@@ -1,7 +1,6 @@
 use std::fs;
 use std::io::Write;
 use tempfile::tempdir;
-use std::path::PathBuf;
 use aria_move::fs_ops::safe_copy_and_rename;
 
 #[test]

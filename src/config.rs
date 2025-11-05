@@ -469,7 +469,7 @@ mod tests {
         assert!(p.is_some());
         let p = p.unwrap();
         assert!(p.ends_with("config.xml"));
-        assert!(p.to_string().contains("aria_move"));
+        assert!(p.to_string_lossy().contains("aria_move"));
 
         std::env::remove_var("HOME");
     }
@@ -483,8 +483,9 @@ mod tests {
         let p = default_log_path();
         assert!(p.is_some());
         let p = p.unwrap();
-        assert!(p.to_string().contains("aria_move"));
-        assert!(p.to_string().ends_with("aria_move.log"));
+        // use .display() to format a PathBuf for printing / string checks
+        assert!(p.display().to_string().contains("aria_move"));
+        assert!(p.display().to_string().ends_with("aria_move.log"));
 
         std::env::remove_var("HOME");
     }
