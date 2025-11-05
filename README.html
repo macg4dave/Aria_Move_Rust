@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>aria_move (Rust) - Documentation</title>
+</head>
+<body>
+
+<h1>aria_move (Rust)</h1>
+<p>
+    A robust helper to move completed downloads (e.g., from aria2) into a "completed" directory safely. 
+    It prefers atomic renames, falls back to safe copy+rename across filesystems, preserves metadata optionally, 
+    and adds safety checks (disk space, symlink defenses, directory security).
+</p>
+
+<h2>Features</h2>
+<ul>
+    <li>Atomic rename when possible; safe copy+rename fallback</li>
+    <li>Optional metadata preservation (permissions, mtime)</li>
+    <li>Disk space check (Unix)</li>
+    <li>Refuses log paths under symlinked ancestors</li>
+    <li>Structured logging (human or JSON)</li>
+    <li>Clear, testable error kinds</li>
+    <li>Cross-platform (macOS, Linux, Windows)</li>
+</ul>
+
+<h2>Requirements</h2>
+<table border="1" cellpadding="8" cellspacing="0">
+    <thead>
+        <tr>
+            <th>Platform</th>
+            <th>Rust Toolchain</th>
+            <th>Notes</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>macOS</td>
+            <td>1.75+ (stable recommended)</td>
+            <td>Edition 2024. Full support for all features.</td>
+        </tr>
+        <tr>
+            <td>Linux</td>
+            <td>1.75+ (stable recommended)</td>
+            <td>Edition 2024. Full support for all features.</td>
+        </tr>
+        <tr>
+            <td>Windows</td>
+            <td>1.75+ (stable recommended)</td>
+            <td>Best-effort support. ACL validation not implemented (see security notes).</td>
+        </tr>
+    </tbody>
+</table>
+
+<p><strong>Check your toolchain:</strong></p>
+<pre><code>rustc --version
+cargo --version
+</code></pre>
+
+<p><strong>Update toolchain (if needed):</strong></p>
+<pre><code>rustup update stable
+rustup default stable
+</code></pre>
+
+<hr>
+
+<h2>Installation</h2>
+
+<h3>macOS</h3>
+<h4>Method 1: Install from source (recommended)</h4>
+<pre><code># Clone the repository
+git clone https://github.com/yourusername/aria_move_rust.git
+cd aria_move_rust/Aria_Move_Rust
+
+# Install to ~/.cargo/bin (ensure it's in your PATH)
+cargo install --path .
+
+# Verify installation
+aria_move --version
+</code></pre>
+
+<h4>Method 2: Build only (manual placement)</h4>
+<pre><code># Build release binary
+cargo build --release
+
+# Binary location: target/release/aria_move
+# Copy to a location in your PATH, e.g.:
+sudo cp target/release/aria_move /usr/local/bin/
+
+# Verify
+aria_move --version
+</code></pre>
+
+<h4>Uninstall</h4>
+<pre><code>cargo uninstall aria_move
+# If manually copied:
+sudo rm /usr/local/bin/aria_move
+</code></pre>
+
+<h3>Linux</h3>
+<h4>Method 1: Install from source (recommended)</h4>
+<pre><code># Clone the repository
+git clone https://github.com/yourusername/aria_move_rust.git
+cd aria_move_rust/Aria_Move_Rust
+
+# Install to ~/.cargo/bin (ensure it's in your PATH)
+cargo install --path .
+
+# Verify installation
+aria_move --version
+</code></pre>
+
+<h4>Method 2: Build only (manual placement)</h4>
+<pre><code># Build release binary
+cargo build --release
+
+# Binary location: target/release/aria_move
+# Copy to a location in your PATH, e.g.:
+sudo cp target/release/aria_move /usr/local/bin/
+
+# Verify
+aria_move --version
+</code></pre>
+
+<h4>Uninstall</h4>
+<pre><code>cargo uninstall aria_move
+# If manually copied:
+sudo rm /usr/local/bin/aria_move
+</code></pre>
+
+<h3>Windows</h3>
+<h4>Method 1: Install from source (recommended)</h4>
+<pre><code># Clone the repository
+git clone https://github.com/yourusername/aria_move_rust.git
+cd aria_move_rust\Aria_Move_Rust
+
+# Install to %USERPROFILE%\.cargo\bin (ensure it's in your PATH)
+cargo install --path .
+
+# Verify installation
+aria_move --version
+</code></pre>
+
+<h4>Method 2: Build only (manual placement)</h4>
+<pre><code># Build release binary
+cargo build --release
+
+# Binary location: target\release\aria_move.exe
+# Copy to a location in your PATH, e.g., C:\Program Files\aria_move\
+# Or add target\release to your PATH environment variable
+
+# Verify
+aria_move --version
+</code></pre>
+
+<h4>Uninstall</h4>
+<pre><code>cargo uninstall aria_move
+# If manually copied, delete the .exe from your PATH location
+</code></pre>
+
+<hr>
+
+<h2>Usage</h2>
+
+<h3>Synopsis</h3>
+<pre><code>aria_move [TASK_ID] [NUM_FILES] [SOURCE_PATH] [FLAGS]
+</code></pre>
+
+<h3>Positional Arguments (Optional)</h3>
+<p>When integrating with aria2, these are typically passed by the download-complete hook:</p>
+<table border="1" cellpadding="8" cellspacing="0">
+    <thead>
+        <tr>
+            <th>Argument</th>
+            <th>Type</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>TASK_ID</code></td>
+            <td>String</td>
+            <td>aria2 GID (informational)</td>
+        </tr>
+        <tr>
+            <td><code>NUM_FILES</code></td>
+            <td>Integer</td>
+            <td>Number of files (0 if unknown)</td>
+        </tr>
+        <tr>
+            <td><code>SOURCE_PATH</code></td>
+            <td>Path</td>
+            <td>File or directory to move</td>
+        </tr>
+    </tbody>
+</table>
+
+<h3>Common Flags</h3>
+<table border="1" cellpadding="8" cellspacing="0">
+    <thead>
+        <tr>
+            <th>Flag</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>--download-base &lt;PATH&gt;</code></td>
+            <td>Override download base directory</td>
+        </tr>
+        <tr>
+            <td><code>--completed-base &lt;PATH&gt;</code></td>
+            <td>Override completed base directory</td>
+        </tr>
+        <tr>
+            <td><code>-d, --debug</code></td>
+            <td>Set log level to debug</td>
+        </tr>
+        <tr>
+            <td><code>--log-level &lt;LEVEL&gt;</code></td>
+            <td>Set log level: quiet, normal, info, debug</td>
+        </tr>
+        <tr>
+            <td><code>--print-config</code></td>
+            <td>Show config file location and exit</td>
+        </tr>
+        <tr>
+            <td><code>--dry-run</code></td>
+            <td>Log actions without modifying filesystem</td>
+        </tr>
+        <tr>
+            <td><code>--preserve-metadata</code></td>
+            <td>Preserve file permissions and mtime</td>
+        </tr>
+        <tr>
+            <td><code>--json</code></td>
+            <td>Emit logs in JSON format</td>
+        </tr>
+    </tbody>
+</table>
+
+<h3>Examples</h3>
+
+<h4>macOS / Linux</h4>
+<pre><code># Auto-resolve most recent file from download_base and move it
+aria_move
+
+# Move a specific source path (typical aria2 hook usage)
+aria_move 7b3f1234 1 /path/to/incoming/file.iso
+
+# Override bases for a one-off run
+aria_move --download-base /data/incoming --completed-base /data/completed
+
+# Dry run with JSON logs
+aria_move --dry-run --json
+
+# Check where config file is located
+aria_move --print-config
+</code></pre>
+
+<h4>Windows (PowerShell)</h4>
+<pre><code># Auto-resolve most recent file
+aria_move
+
+# Move a specific source path
+aria_move 7b3f1234 1 C:\Downloads\file.iso
+
+# Override bases
+aria_move --download-base C:\Downloads --completed-base D:\Completed
+
+# Dry run with JSON logs
+aria_move --dry-run --json
+
+# Check config location
+aria_move --print-config
+</code></pre>
+
+<hr>
+
+<h2>Integration with aria2</h2>
+
+<h3>macOS / Linux</h3>
+<p>Create a wrapper script as aria2's <code>on-download-complete</code> hook:</p>
+
+<pre><code>#!/usr/bin/env bash
+# Save as: /usr/local/bin/aria_move_hook.sh
+# chmod +x /usr/local/bin/aria_move_hook.sh
+# Args from aria2: GID, NUM, FILE (NUM may be 0 when unknown)
+exec /usr/local/bin/aria_move "$1" "$2" "$3"
+</code></pre>
+
+<p>Add to <code>aria2.conf</code>:</p>
+<pre><code>on-download-complete=/usr/local/bin/aria_move_hook.sh
+</code></pre>
+
+<h3>Windows</h3>
+<p>Create a batch file wrapper:</p>
+
+<pre><code>@echo off
+REM Save as: C:\Program Files\aria_move\aria_move_hook.bat
+REM Args from aria2: GID, NUM, FILE
+"C:\Program Files\aria_move\aria_move.exe" %1 %2 %3
+</code></pre>
+
+<p>Add to <code>aria2.conf</code>:</p>
+<pre><code>on-download-complete=C:\Program Files\aria_move\aria_move_hook.bat
+</code></pre>
+
+<hr>
+
+<h2>Configuration</h2>
+
+<h3>Config File Location (XML)</h3>
+<table border="1" cellpadding="8" cellspacing="0">
+    <thead>
+        <tr>
+            <th>Platform</th>
+            <th>Default Path</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>macOS</td>
+            <td><code>~/Library/Application Support/aria_move/config.xml</code></td>
+        </tr>
+        <tr>
+            <td>Linux</td>
+            <td><code>~/.config/aria_move/config.xml</code></td>
+        </tr>
+        <tr>
+            <td>Windows</td>
+            <td><code>%APPDATA%\aria_move\config.xml</code></td>
+        </tr>
+    </tbody>
+</table>
+
+<h3>Override Config Location</h3>
+<p>Set the <code>ARIA_MOVE_CONFIG</code> environment variable:</p>
+
+<h4>macOS / Linux</h4>
+<pre><code>export ARIA_MOVE_CONFIG=/custom/path/to/config.xml
+aria_move
+</code></pre>
+
+<h4>Windows (PowerShell)</h4>
+<pre><code>$env:ARIA_MOVE_CONFIG = "C:\custom\path\to\config.xml"
+aria_move
+</code></pre>
+
+<h3>First Run Behavior</h3>
+<p>
+    If no config exists and <code>ARIA_MOVE_CONFIG</code> is unset, aria_move creates a secure template and exits. 
+    Edit the template with your paths and rerun.
+</p>
+
+<h3>Config Fields (XML)</h3>
+<pre><code>&lt;config&gt;
+  &lt;download_base&gt;/mnt/World/incoming&lt;/download_base&gt;
+  &lt;completed_base&gt;/mnt/World/completed&lt;/completed_base&gt;
+  &lt;log_level&gt;normal&lt;/log_level&gt;
+  &lt;log_file&gt;/path/to/aria_move.log&lt;/log_file&gt;
+  &lt;preserve_metadata&gt;false&lt;/preserve_metadata&gt;
+  &lt;recent_window_seconds&gt;300&lt;/recent_window_seconds&gt;
+&lt;/config&gt;
+</code></pre>
+
+<table border="1" cellpadding="8" cellspacing="0">
+    <thead>
+        <tr>
+            <th>Field</th>
+            <th>Type</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>download_base</code></td>
+            <td>Path</td>
+            <td>Where partial/new downloads appear</td>
+        </tr>
+        <tr>
+            <td><code>completed_base</code></td>
+            <td>Path</td>
+            <td>Final destination for completed items</td>
+        </tr>
+        <tr>
+            <td><code>log_level</code></td>
+            <td>String</td>
+            <td>quiet, normal, info, debug</td>
+        </tr>
+        <tr>
+            <td><code>log_file</code></td>
+            <td>Path</td>
+            <td>Full path to log file (optional)</td>
+        </tr>
+        <tr>
+            <td><code>preserve_metadata</code></td>
+            <td>Boolean</td>
+            <td>Preserve permissions and mtime (default: false)</td>
+        </tr>
+        <tr>
+            <td><code>recent_window_seconds</code></td>
+            <td>Integer</td>
+            <td>Recency window for auto-resolving most recent file (default: 300)</td>
+        </tr>
+    </tbody>
+</table>
+
+<h3>Security Notes</h3>
+<ul>
+    <li><strong>macOS/Linux:</strong> aria_move enforces safe directory permissions/ownership for <code>download_base</code> and <code>completed_base</code>. Directories must be owned by the current user and not group/world writable (mode &amp; 0o022 == 0).</li>
+    <li><strong>Windows:</strong> Basic readonly check only. Full ACL validation is not implemented. Use <code>icacls</code> to verify permissions manually.</li>
+    <li><strong>Log file:</strong> On Unix, log file path is refused if any ancestor is a symlink (prevents symlink attacks).</li>
+</ul>
+
+<hr>
+
+<h2>Logging</h2>
+
+<h3>Log Formats</h3>
+<ul>
+    <li><strong>Human-readable (default):</strong> Compact format with timestamps</li>
+    <li><strong>JSON:</strong> Use <code>--json</code> flag for structured logs</li>
+</ul>
+
+<h3>Log Levels</h3>
+<table border="1" cellpadding="8" cellspacing="0">
+    <thead>
+        <tr>
+            <th>Level</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>quiet</code></td>
+            <td>Only errors</td>
+        </tr>
+        <tr>
+            <td><code>normal</code></td>
+            <td>Informational (default)</td>
+        </tr>
+        <tr>
+            <td><code>info</code></td>
+            <td>More detailed info</td>
+        </tr>
+        <tr>
+            <td><code>debug</code></td>
+            <td>Debug/trace output</td>
+        </tr>
+    </tbody>
+</table>
+
+<h3>Examples</h3>
+<pre><code># JSON logs with info level
+aria_move --json --log-level info
+
+# Debug mode (shorthand)
+aria_move -d
+</code></pre>
+
+<hr>
+
+<h2>Development</h2>
+
+<h3>Build</h3>
+<h4>macOS / Linux</h4>
+<pre><code># Debug build
+cargo build
+
+# Release build
+cargo build --release
+</code></pre>
+
+<h4>Windows</h4>
+<pre><code># Debug build
+cargo build
+
+# Release build
+cargo build --release
+</code></pre>
+
+<h3>Format and Lint</h3>
+<pre><code># Format code
+cargo fmt
+
+# Lint with clippy
+cargo clippy --all-targets -- -D warnings
+</code></pre>
+
+<h3>Run Tests</h3>
+<h4>macOS / Linux</h4>
+<pre><code>cargo test
+</code></pre>
+
+<h4>Windows</h4>
+<pre><code>cargo test
+</code></pre>
+
+<p><strong>Note:</strong> Some Unix-specific tests are skipped on Windows (e.g., symlink ancestor checks).</p>
+
+<hr>
+
+<h2>Troubleshooting</h2>
+
+<h3>Proc-macro ABI Mismatch (e.g., clap_derive dylib error)</h3>
+<h4>macOS / Linux</h4>
+<pre><code>cargo clean
+rm -rf target
+rustup update stable && rustup default stable
+cargo check
+</code></pre>
+
+<h4>Windows</h4>
+<pre><code>cargo clean
+rmdir /s /q target
+rustup update stable
+rustup default stable
+cargo check
+</code></pre>
+
+<p>In VS Code: Command Palette → "Rust Analyzer: Restart Server"</p>
+
+<h3>"unresolved import aria_move"</h3>
+<p>Ensure <code>Cargo.toml</code> package name matches imports:</p>
+<pre><code>[package]
+name = "aria_move"
+</code></pre>
+
+<h3>Tests Failing with env::set_var Unsafe Errors</h3>
+<p>
+    Tests that modify environment variables now spawn child processes to isolate env changes. 
+    This is expected behavior and avoids unsafe blocks.
+</p>
+
+<h3>Windows-Specific Issues</h3>
+<h4>ACL Validation Not Implemented</h4>
+<p>
+    aria_move performs basic readonly checks on Windows but does not validate full ACLs. 
+    Use <code>icacls</code> to verify permissions manually:
+</p>
+<pre><code>icacls C:\path\to\download_base
+icacls C:\path\to\completed_base
+</code></pre>
+
+<h4>Disk Space Check Not Implemented</h4>
+<p>
+    The Unix disk space check (statvfs) is not available on Windows. 
+    Ensure sufficient space manually before large moves.
+</p>
+
+<hr>
+
+<h2>Platform-Specific Feature Matrix</h2>
+<table border="1" cellpadding="8" cellspacing="0">
+    <thead>
+        <tr>
+            <th>Feature</th>
+            <th>macOS</th>
+            <th>Linux</th>
+            <th>Windows</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>Atomic rename</td>
+            <td>✅</td>
+            <td>✅</td>
+            <td>✅</td>
+        </tr>
+        <tr>
+            <td>Safe copy+rename fallback</td>
+            <td>✅</td>
+            <td>✅</td>
+            <td>✅</td>
+        </tr>
+        <tr>
+            <td>Metadata preservation</td>
+            <td>✅</td>
+            <td>✅</td>
+            <td>✅ (basic)</td>
+        </tr>
+        <tr>
+            <td>Disk space check</td>
+            <td>✅</td>
+            <td>✅</td>
+            <td>❌</td>
+        </tr>
+        <tr>
+            <td>Directory security validation</td>
+            <td>✅ (ownership + mode)</td>
+            <td>✅ (ownership + mode)</td>
+            <td>⚠️ (readonly only)</td>
+        </tr>
+        <tr>
+            <td>Symlink ancestor detection</td>
+            <td>✅</td>
+            <td>✅</td>
+            <td>❌</td>
+        </tr>
+        <tr>
+            <td>O_NOFOLLOW log file open</td>
+            <td>✅</td>
+            <td>✅</td>
+            <td>❌</td>
+        </tr>
+        <tr>
+            <td>Structured logging (JSON)</td>
+            <td>✅</td>
+            <td>✅</td>
+            <td>✅</td>
+        </tr>
+    </tbody>
+</table>
+
+<hr>
+
+<h2>License</h2>
+<p>MIT</p>
+
+<hr>
+
+<h2>Contributing</h2>
+<p>
+    Contributions welcome! Please open an issue or pull request on GitHub. 
+    Ensure all tests pass and code is formatted/linted before submitting.
+</p>
+
+<h3>Contributor Checklist</h3>
+<ul>
+    <li>Run <code>cargo fmt</code></li>
+    <li>Run <code>cargo clippy --all-targets -- -D warnings</code></li>
+    <li>Run <code>cargo test</code> (all platforms if possible)</li>
+    <li>Update README.md if adding features</li>
+</ul>
+
+</body>
+</html>
