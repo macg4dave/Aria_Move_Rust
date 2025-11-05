@@ -1,0 +1,47 @@
+[graph]
+all-features = true
+no-default-features = false
+
+[advisories]
+vulnerability = "deny"
+unmaintained = "warn"
+unsound = "warn"
+yanked = "warn"
+ignore = []  # add specific RUSTSEC-* IDs here if you must
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+deny = []
+skip = []
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = ["https://github.com/*"]
+
+[licenses]
+# Deny if a crate is missing license info
+unlicensed = "deny"
+# Common permissive licenses that are fine
+allow = [
+  "Apache-2.0",
+  "MIT",
+  "BSD-3-Clause",
+  "BSD-2-Clause",
+  "MPL-2.0",
+  "ISC",
+  "Zlib",
+  "Unicode-DFS-2016",
+  "CC0-1.0",
+  "OpenSSL",
+  "Apache-2.0 WITH LLVM-exception",
+]
+# Disallow strong copyleft by default
+deny = ["GPL-3.0", "AGPL-3.0", "LGPL-3.0", "GPL-2.0"]
+copyleft = "warn"  # set to "deny" if your policy requires
+allow-osi-fsf-free = "either"
+confidence-threshold = 0.8
+exceptions = []

@@ -12,6 +12,8 @@ use tracing_subscriber::Layer;
 use tracing_appender::non_blocking::WorkerGuard;
 use chrono::Local;
 use std::fmt as stdfmt;
+use std::sync::{Arc, Mutex};
+use aria_move::shutdown;
 
 use aria_move::{Config, LogLevel, move_entry, validate_paths, ensure_default_config_exists, default_config_path, path_has_symlink_ancestor};
 use std::env;
@@ -57,6 +59,14 @@ struct Args {
     /// Dry-run: log actions but do not change filesystem.
     #[arg(long, help = "Show what would be done, but do not modify files/directories")]
     dry_run: bool,
+
+    /// Preserve file permissions and mtime when moving (slower). Off by default.
+    #[arg(long, help = "Preserve file permissions and mtime when moving (slower)")]
+    preserve_metadata: bool,
+
+    /// Emit logs in structured JSON (includes timestamp, level, fields)
+    #[arg(long, help = "Emit logs in structured JSON")]
+    json: bool,
 }
 
 // small custom timer to print timestamps in user's human-readable format: DD/MM/YY HH:MM:SS
@@ -72,7 +82,13 @@ impl FormatTime for LocalHumanTime {
 
 /// Initialize tracing based on our LogLevel. Returns an optional WorkerGuard if a file
 /// appender was created; caller should drop the guard before exit to ensure logs are written.
-fn init_logging_level(lvl: &LogLevel, log_file: Option<&std::path::Path>) -> Result<Option<WorkerGuard>> {
+fn init_logging_level(
+    lvl: &LogLevel,
+    log_file: Option<&std::path::Path>,
+    json: bool,
+) -> Result<Option<WorkerGuard>> {
+    use tracing_subscriber::fmt as tsfmt;
+
     // build tracing level filter from our LogLevel
     let level_filter = match lvl {
         LogLevel::Quiet => LevelFilter::ERROR,
@@ -81,73 +97,130 @@ fn init_logging_level(lvl: &LogLevel, log_file: Option<&std::path::Path>) -> Res
         LogLevel::Debug => LevelFilter::TRACE,
     };
 
-    // use our human-friendly timer
-    let timer = LocalHumanTime;
-
-    // stdout layer
-    let stdout_layer = fmt::layer()
-        .with_timer(timer)
-        .with_target(false)
-        .compact()
-        .with_filter(level_filter);
-
-    // If file logging requested, create file layer and init subscriber with both layers.
-    if let Some(path) = log_file {
-        // security: refuse to create/open log file if any existing ancestor is a symlink
-        match path_has_symlink_ancestor(path) {
-            Ok(true) => {
-                eprintln!("Refusing to enable file logging: existing ancestor of {} is a symlink; proceeding without file logging.", path.display());
-                registry().with(stdout_layer).init();
-                return Ok(None);
-            }
-            Err(e) => {
-                eprintln!("Error checking log path {} for symlinks: {}; proceeding without file logging.", path.display(), e);
-                registry().with(stdout_layer).init();
-                return Ok(None);
-            }
-            Ok(false) => { /* ok to proceed */ }
-        }
-
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).ok();
-        }
-
-        // open file safely: on Unix use O_NOFOLLOW and restrictive mode
-        #[cfg(unix)]
-        let file = {
-            use std::fs::OpenOptions;
-            let mut opts = OpenOptions::new();
-            opts.create(true).append(true);
-            // set mode 0o600 and O_NOFOLLOW to avoid symlink attacks
-            opts.mode(0o600).custom_flags(libc::O_NOFOLLOW);
-            opts.open(path).map_err(|e| anyhow::anyhow!("Failed to open log file {}: {}", path.display(), e))?
-        };
-        #[cfg(not(unix))]
-        let file = {
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-                .map_err(|e| anyhow::anyhow!("Failed to open log file {}: {}", path.display(), e))?
-        };
-
-        // non-blocking writer + guard
-        let (non_blocking_writer, guard) = tracing_appender::non_blocking(file);
-
-        let file_layer = fmt::layer()
+    // Branch on JSON vs pretty to avoid mixed generic types.
+    if json {
+        // stdout JSON layer
+        let stdout_layer = tsfmt::layer()
+            .json()
             .with_timer(LocalHumanTime)
+            .with_level(true)
             .with_target(false)
-            .compact()
-            .with_writer(non_blocking_writer)
             .with_filter(level_filter);
 
-        // install subscriber with both layers
-        registry().with(stdout_layer).with(file_layer).init();
-        Ok(Some(guard))
+        // If file logging requested, add a JSON file layer as well.
+        if let Some(path) = log_file {
+            // security: refuse file logging if any existing ancestor is a symlink
+            match path_has_symlink_ancestor(path) {
+                Ok(true) => {
+                    eprintln!("Refusing to enable file logging: existing ancestor of {} is a symlink; proceeding without file logging.", path.display());
+                    registry().with(stdout_layer).init();
+                    return Ok(None);
+                }
+                Err(e) => {
+                    eprintln!("Error checking log path {} for symlinks: {}; proceeding without file logging.", path.display(), e);
+                    registry().with(stdout_layer).init();
+                    return Ok(None);
+                }
+                Ok(false) => {}
+            }
+
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+
+            // open log file safely
+            #[cfg(unix)]
+            let file = {
+                let mut opts = std::fs::OpenOptions::new();
+                opts.create(true).append(true).mode(0o600).custom_flags(libc::O_NOFOLLOW);
+                opts.open(path).map_err(|e| anyhow::anyhow!("Failed to open log file {}: {}", path.display(), e))?
+            };
+            #[cfg(not(unix))]
+            let file = {
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                    .map_err(|e| anyhow::anyhow!("Failed to open log file {}: {}", path.display(), e))?
+            };
+
+            let (writer, guard) = tracing_appender::non_blocking(file);
+
+            let file_layer = tsfmt::layer()
+                .json()
+                .with_timer(LocalHumanTime)
+                .with_level(true)
+                .with_target(false)
+                .with_writer(writer)
+                .with_filter(level_filter);
+
+            registry().with(stdout_layer).with(file_layer).init();
+            return Ok(Some(guard));
+        } else {
+            // stdout only (JSON)
+            registry().with(stdout_layer).init();
+            return Ok(None);
+        }
     } else {
-        // install subscriber with only stdout layer
-        registry().with(stdout_layer).init();
-        Ok(None)
+        // Pretty/compact text for both stdout and file (consistent fields)
+        let stdout_layer = tsfmt::layer()
+            .with_timer(LocalHumanTime)
+            .with_level(true)
+            .with_target(false)
+            .compact()
+            .with_filter(level_filter);
+
+        if let Some(path) = log_file {
+            // security: refuse file logging if any existing ancestor is a symlink
+            match path_has_symlink_ancestor(path) {
+                Ok(true) => {
+                    eprintln!("Refusing to enable file logging: existing ancestor of {} is a symlink; proceeding without file logging.", path.display());
+                    registry().with(stdout_layer).init();
+                    return Ok(None);
+                }
+                Err(e) => {
+                    eprintln!("Error checking log path {} for symlinks: {}; proceeding without file logging.", path.display(), e);
+                    registry().with(stdout_layer).init();
+                    return Ok(None);
+                }
+                Ok(false) => {}
+            }
+
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+
+            #[cfg(unix)]
+            let file = {
+                let mut opts = std::fs::OpenOptions::new();
+                opts.create(true).append(true).mode(0o600).custom_flags(libc::O_NOFOLLOW);
+                opts.open(path).map_err(|e| anyhow::anyhow!("Failed to open log file {}: {}", path.display(), e))?
+            };
+            #[cfg(not(unix))]
+            let file = {
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                    .map_err(|e| anyhow::anyhow!("Failed to open log file {}: {}", path.display(), e))?
+            };
+
+            let (writer, guard) = tracing_appender::non_blocking(file);
+
+            let file_layer = tsfmt::layer()
+                .with_timer(LocalHumanTime)
+                .with_level(true)
+                .with_target(false)
+                .compact()
+                .with_writer(writer)
+                .with_filter(level_filter);
+
+            registry().with(stdout_layer).with(file_layer).init();
+            return Ok(Some(guard));
+        } else {
+            registry().with(stdout_layer).init();
+            return Ok(None);
+        }
     }
 }
 
@@ -212,11 +285,39 @@ fn main() -> Result<()> {
         println!("Running in dry-run mode: no filesystem changes will be made.");
     }
 
-    // initialize logging with chosen level (config or default), include file if configured
-    let guard_opt = init_logging_level(&cfg.log_level, cfg.log_file.as_deref()).map_err(|e| {
+    // preserve_metadata propagation
+    if args.preserve_metadata {
+        cfg.preserve_metadata = true;
+    }
+
+    // initialize logging and capture the guard so we can drop it on signal
+    let guard_opt = init_logging_level(&cfg.log_level, cfg.log_file.as_deref(), args.json).map_err(|e| {
         eprintln!("Failed to initialize logging: {}", e);
         e
     })?;
+
+    // wrap the guard for safe drop in the ctrlc handler
+    let guard_slot = Arc::new(Mutex::new(guard_opt));
+    {
+        let guard_slot = Arc::clone(&guard_slot);
+        ctrlc::set_handler(move || {
+            // set shutdown flag first so work can abort
+            shutdown::request();
+            eprintln!("Received interrupt; shutting down gracefully...");
+
+            // take and drop the WorkerGuard to flush any buffered logs
+            if let Ok(mut g) = guard_slot.lock() {
+                if g.is_some() {
+                    let _ = g.take(); // drop guard here to flush tracing_appender
+                }
+            }
+        }).expect("failed to install signal handler");
+    }
+
+    // optional: early abort if signal already requested
+    if shutdown::is_requested() {
+        return Ok(());
+    }
 
     info!("Starting aria_move: {:?}", args);
 

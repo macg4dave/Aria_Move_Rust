@@ -58,10 +58,10 @@ impl LogLevel {
 pub struct Config {
     pub download_base: PathBuf,
     pub completed_base: PathBuf,
-    pub recent_window: Duration,
     pub log_level: LogLevel,
     pub log_file: Option<PathBuf>, // path to a file where the program will write logs
     pub dry_run: bool,             // if true, operations are logged but not performed
+    pub preserve_metadata: bool,
 }
 
 impl Default for Config {
@@ -70,19 +70,19 @@ impl Default for Config {
             Self {
                 download_base: db,
                 completed_base: cb,
-                recent_window: RECENT_FILE_WINDOW,
                 log_level: lvl.unwrap_or_default(),
                 log_file: lfile,
                 dry_run: false,
+                preserve_metadata: false,
             }
         } else {
             Self {
                 download_base: PathBuf::from(DOWNLOAD_BASE_DEFAULT),
                 completed_base: PathBuf::from(COMPLETED_BASE_DEFAULT),
-                recent_window: RECENT_FILE_WINDOW,
                 log_level: LogLevel::default(),
                 log_file: default_log_path(),
                 dry_run: false,
+                preserve_metadata: false,
             }
         }
     }
@@ -97,10 +97,10 @@ impl Config {
         Self {
             download_base: download_base.into(),
             completed_base: completed_base.into(),
-            recent_window,
             log_level: LogLevel::default(),
             log_file: default_log_path(),
             dry_run: false,
+            preserve_metadata: false,
         }
     }
 
@@ -147,46 +147,83 @@ impl Config {
         })?;
         debug!("Completed base writable: {}", self.completed_base.display());
 
-        // ensure bases not same (resolve symlinks)
+        // Resolve symlinks and ensure the bases are disjoint (neither contains the other).
         let db_real = fs::canonicalize(&self.download_base).unwrap_or_else(|_| self.download_base.clone());
         let cb_real = fs::canonicalize(&self.completed_base).unwrap_or_else(|_| self.completed_base.clone());
+
         if db_real == cb_real {
-            error!("Download and completed base resolve to same path: {}", db_real.display());
-            bail!("Download and completed base must be different paths; both resolve to '{}'", db_real.display());
+            bail!("download_base and completed_base resolve to the same path: '{}'", db_real.display());
+        }
+        if db_real.starts_with(&cb_real) {
+            bail!(
+                "download_base '{}' must not be inside completed_base '{}'",
+                db_real.display(),
+                cb_real.display()
+            );
+        }
+        if cb_real.starts_with(&db_real) {
+            bail!(
+                "completed_base '{}' must not be inside download_base '{}'",
+                cb_real.display(),
+                db_real.display()
+            );
         }
 
         // Unix-specific ownership & permission checks
         #[cfg(unix)]
         {
-            // download_base permissions
-            let db_meta = fs::metadata(&self.download_base).with_context(|| {
-                format!("Failed to stat download base '{}'", self.download_base.display())
-            })?;
-            let db_mode = db_meta.permissions().mode();
-            if db_mode & 0o022 != 0 {
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+            // download_base permissions/ownership
+            let db_meta = fs::metadata(&self.download_base)
+                .with_context(|| format!("Failed to stat download base '{}'", self.download_base.display()))?;
+            if db_meta.permissions().mode() & 0o022 != 0 {
                 bail!("Download base '{}' is group/world-writable; refuse to operate on insecure directory", self.download_base.display());
             }
-            let db_uid = db_meta.uid();
-            if db_uid != unsafe { libc::geteuid() } {
-                bail!("Download base '{}' is not owned by current user (uid {})", self.download_base.display(), unsafe {
-                    libc::geteuid()
-                });
+            if db_meta.uid() != unsafe { libc::geteuid() } {
+                bail!(
+                    "Download base '{}' is not owned by current user (uid {})",
+                    self.download_base.display(),
+                    unsafe { libc::geteuid() }
+                );
             }
 
-            // completed_base permissions
-            let cb_meta = fs::metadata(&self.completed_base).with_context(|| {
-                format!("Failed to stat completed base '{}'", self.completed_base.display())
-            })?;
-            let cb_mode = cb_meta.permissions().mode();
-            if cb_mode & 0o022 != 0 {
+            // completed_base permissions/ownership
+            let cb_meta = fs::metadata(&self.completed_base)
+                .with_context(|| format!("Failed to stat completed base '{}'", self.completed_base.display()))?;
+            if cb_meta.permissions().mode() & 0o022 != 0 {
                 bail!("Completed base '{}' is group/world-writable; refuse to operate on insecure directory", self.completed_base.display());
             }
-            let cb_uid = cb_meta.uid();
-            if cb_uid != unsafe { libc::geteuid() } {
-                bail!("Completed base '{}' is not owned by current user (uid {})", self.completed_base.display(), unsafe {
-                    libc::geteuid()
-                });
+            if cb_meta.uid() != unsafe { libc::geteuid() } {
+                bail!(
+                    "Completed base '{}' is not owned by current user (uid {})",
+                    self.completed_base.display(),
+                    unsafe { libc::geteuid() }
+                );
             }
+        }
+
+        // Windows: minimal checks + warning (full ACL/SID checks not implemented)
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            const FILE_ATTRIBUTE_READONLY: u32 = 0x0000_0001;
+
+            for (label, path) in [("download_base", &self.download_base), ("completed_base", &self.completed_base)] {
+                if let Ok(meta) = fs::metadata(path) {
+                    let attrs = meta.file_attributes();
+                    if attrs & FILE_ATTRIBUTE_READONLY != 0 {
+                        bail!("{} '{}' has the READONLY attribute set; cannot write", label, path.display());
+                    }
+                }
+            }
+
+            // Informational: we are not inspecting ownership/ACLs here.
+            tracing::warn!(
+                "Skipping ownership/ACL validation on Windows; ensure '{}' and '{}' are not writable by 'Everyone' and owned by the current user.",
+                self.download_base.display(),
+                self.completed_base.display()
+            );
         }
 
         info!(
@@ -205,6 +242,7 @@ impl Config {
 /// Struct mirroring the XML config for deserialization.
 #[derive(Debug, Deserialize)]
 #[serde(rename = "config")]
+#[serde(deny_unknown_fields)]
 struct XmlConfig {
     #[serde(rename = "download_base")]
     download_base: Option<String>,
@@ -217,6 +255,10 @@ struct XmlConfig {
 
     #[serde(rename = "log_file")]
     log_file: Option<String>,
+
+    // optional: preserve metadata (permissions/mtime) when moving (default false)
+    #[serde(rename = "preserve_metadata")]
+    preserve_metadata: Option<bool>,
 }
 
 /// Read config from XML. OS-aware default path used if ARIA_MOVE_CONFIG not set.
@@ -239,8 +281,18 @@ fn load_config_from_xml() -> Option<(PathBuf, PathBuf, Option<LogLevel>, Option<
     let parsed: XmlConfig = match from_xml_str(&content) {
         Ok(x) => x,
         Err(e) => {
-            // parsing failure: log and fall back to defaults
-            debug!("Failed to parse config.xml at {}: {}", cfg_path.display(), e);
+            let msg = e.to_string();
+            // Hard-fail only on unknown fields to avoid silent misconfiguration.
+            if msg.contains("unknown field") {
+                eprintln!(
+                    "Unknown field in config {}: {}. Refusing to start.",
+                    cfg_path.display(),
+                    msg
+                );
+                panic!("Unknown field in aria_move config");
+            }
+            // Other parse errors still fall back to defaults (legacy behavior)
+            debug!("Failed to parse config.xml at {}: {}", cfg_path.display(), msg);
             return None;
         }
     };
@@ -328,7 +380,7 @@ pub fn create_template_config(path: &Path) -> io::Result<()> {
     let suggested_log = default_log_path().map(|p| p.display().to_string()).unwrap_or_else(|| "/path/to/aria_move.log".into());
 
     let content = format!(
-        "<config>\n  <download_base>{}</download_base>\n  <completed_base>{}</completed_base>\n  <log_level>normal</log_level>\n  <log_file>{}</log_file>\n</config>\n",
+        "<config>\n  <download_base>{}</download_base>\n  <completed_base>{}</completed_base>\n  <log_level>normal</log_level>\n  <log_file>{}</log_file>\n  <!-- optional: preserve file permissions and mtime when moving (default: false) -->\n  <preserve_metadata>false</preserve_metadata>\n</config>\n",
         DOWNLOAD_BASE_DEFAULT,
         COMPLETED_BASE_DEFAULT,
         suggested_log
