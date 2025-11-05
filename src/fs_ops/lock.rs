@@ -1,3 +1,6 @@
+//! Advisory move lock.
+//! Uses a sidecar lock file and fs2::FileExt to ensure only one process moves a path at a time.
+
 use anyhow::{bail, Result};
 use fs2::FileExt;
 use std::path::{Path, PathBuf};

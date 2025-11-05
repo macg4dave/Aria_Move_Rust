@@ -1,3 +1,7 @@
+//! File move implementation.
+//! Attempts atomic rename; on cross-filesystem or errors, falls back to safe copy+rename.
+//! Preserves metadata if requested and uses an advisory move lock.
+
 use anyhow::{bail, Result};
 use std::io;
 use std::path::{Path, PathBuf};

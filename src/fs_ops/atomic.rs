@@ -1,3 +1,6 @@
+//! Atomic rename helper.
+//! Performs rename and syncs the destination directory; removes existing dest on Windows.
+
 use anyhow::Result;
 use std::fs;
 use std::fs::OpenOptions;

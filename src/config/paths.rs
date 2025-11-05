@@ -1,3 +1,6 @@
+//! Default path helpers and symlink checks.
+//! Determines OS-appropriate config/log paths and detects symlinked ancestors for safety.
+
 use dirs::{config_dir, data_dir};
 use std::fs;
 use std::io;

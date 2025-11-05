@@ -1,6 +1,8 @@
-//! aria_move library — modular entry points.
+//! Library crate root for aria_move.
+//! Exposes the public API by organizing modules and re-exporting key functions/types.
+
 pub mod config;
-pub mod fs_ops; // now a directory module
+pub mod fs_ops;
 pub mod shutdown;
 pub mod utils;
 

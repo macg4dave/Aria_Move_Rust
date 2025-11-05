@@ -1,4 +1,7 @@
-use anyhow::{Context, Result};
+//! XML configuration support.
+//! Loads settings from config.xml, creates a secure template if needed, and ensures a default config exists.
+
+use anyhow::Result;
 use quick_xml::de::from_str as from_xml_str;
 use serde::Deserialize;
 use std::env;

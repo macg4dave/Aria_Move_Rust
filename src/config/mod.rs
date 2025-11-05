@@ -1,5 +1,6 @@
 //! Config module (modularized).
-//! Re-exports preserve the previous public API.
+//! Provides configuration types, default paths, XML loading, and validation.
+//! Re-exports preserve the previous public API for external callers.
 
 pub mod types;
 pub mod paths;

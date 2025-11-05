@@ -1,3 +1,6 @@
+//! Safe copy-and-rename helper.
+//! Copies to a temp file in the destination directory, fsyncs, renames into place, and fsyncs the parent.
+
 use anyhow::Result;
 use std::fs;
 use std::fs::OpenOptions;

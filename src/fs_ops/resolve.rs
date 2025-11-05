@@ -1,3 +1,6 @@
+//! Resolving the source path.
+//! Uses an explicit path if provided; otherwise finds the most recent file under download_base.
+
 use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;

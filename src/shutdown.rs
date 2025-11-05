@@ -1,6 +1,8 @@
 //! Global shutdown flag set by ctrlc handler for SIGINT/SIGTERM.
 //! Other modules can call is_requested() to abort promptly.
-
+//! Process-wide shutdown coordination.
+//! Provides a flag set by signal handlers so long-running operations can exit early.
+//! 
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static SHUTDOWN: AtomicBool = AtomicBool::new(false);

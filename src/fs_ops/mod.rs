@@ -1,15 +1,16 @@
-//! Filesystem operations: modularized.
+//! Filesystem operations (modularized).
+//! High-level entry points for moving files/directories, plus supporting utilities.
 
-mod atomic;
-mod copy;
-mod dir_move;
-mod disk;
+mod resolve;
 mod entry;
 mod file_move;
-mod helpers;
-mod lock;
+mod dir_move;
+mod atomic;
+mod copy;
 mod meta;
-mod resolve;
+mod lock;
+mod helpers;
+mod disk;
 
 pub use copy::{safe_copy_and_rename, safe_copy_and_rename_with_metadata};
 pub use dir_move::move_dir;

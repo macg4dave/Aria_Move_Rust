@@ -1,3 +1,6 @@
+//! Metadata preservation.
+//! Optionally copies permissions and timestamps from source to destination.
+
 use anyhow::Result;
 use filetime::{set_file_times, FileTime};
 use std::fs;

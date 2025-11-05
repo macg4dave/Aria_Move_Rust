@@ -1,3 +1,6 @@
+//! Config validation logic.
+//! Verifies directory existence, readability/writability, disjoint paths, and platform-specific security checks.
+
 use anyhow::{bail, Context, Result};
 use std::fs;
 

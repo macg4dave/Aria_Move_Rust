@@ -1,3 +1,6 @@
+//! Core configuration types.
+//! Defines Config (runtime settings) and LogLevel (verbosity parsing and defaults).
+
 use std::path::PathBuf;
 use std::time::Duration;
 

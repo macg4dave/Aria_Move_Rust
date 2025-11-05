@@ -1,3 +1,6 @@
+//! I/O helper utilities.
+//! Converts io::Error values into action-oriented anyhow::Error messages with context and hints.
+
 use anyhow::anyhow;
 use std::io;
 use std::path::Path;

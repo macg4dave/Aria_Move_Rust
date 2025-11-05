@@ -1,3 +1,6 @@
+//! Directory move implementation.
+//! Tries a rename first; if that fails, copies the tree (parallelized) and removes the source.
+
 use anyhow::{anyhow, bail, Result};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};

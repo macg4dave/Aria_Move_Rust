@@ -1,14 +1,17 @@
+//! Tracing initialization.
+//! Builds a subscriber with EnvFilter, supports compact or JSON formats, and optional file logging.
+
 use anyhow::Result;
-use aria_move::{LogLevel, path_has_symlink_ancestor};
+use aria_move::{path_has_symlink_ancestor, LogLevel};
 use chrono::Local;
 use std::fmt as stdfmt;
 use std::path::Path;
-use tracing_subscriber::fmt::time::FormatTime;
+use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
+use tracing_subscriber::fmt::time::FormatTime;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_appender::non_blocking::WorkerGuard;
 
 #[cfg(unix)]
 use libc;
@@ -89,7 +92,9 @@ pub fn init_tracing(
                 opts.create(true).append(true);
                 opts.mode(0o600);
                 opts.custom_flags(libc::O_NOFOLLOW);
-                opts.open(path).map_err(|e| anyhow::anyhow!("Failed to open log file {}: {}", path.display(), e))?
+                opts.open(path).map_err(|e| {
+                    anyhow::anyhow!("Failed to open log file {}: {}", path.display(), e)
+                })?
             };
             #[cfg(not(unix))]
             let file = {
@@ -97,7 +102,9 @@ pub fn init_tracing(
                     .create(true)
                     .append(true)
                     .open(path)
-                    .map_err(|e| anyhow::anyhow!("Failed to open log file {}: {}", path.display(), e))?
+                    .map_err(|e| {
+                        anyhow::anyhow!("Failed to open log file {}: {}", path.display(), e)
+                    })?
             };
 
             let (writer, guard) = tracing_appender::non_blocking(file);
@@ -108,7 +115,11 @@ pub fn init_tracing(
                 .with_target(false)
                 .with_writer(writer);
 
-            registry().with(env_filter).with(stdout_layer).with(file_layer).init();
+            registry()
+                .with(env_filter)
+                .with(stdout_layer)
+                .with(file_layer)
+                .init();
             Ok(Some(guard))
         } else {
             registry().with(env_filter).with(stdout_layer).init();
@@ -146,7 +157,9 @@ pub fn init_tracing(
                 opts.create(true).append(true);
                 opts.mode(0o600);
                 opts.custom_flags(libc::O_NOFOLLOW);
-                opts.open(path).map_err(|e| anyhow::anyhow!("Failed to open log file {}: {}", path.display(), e))?
+                opts.open(path).map_err(|e| {
+                    anyhow::anyhow!("Failed to open log file {}: {}", path.display(), e)
+                })?
             };
             #[cfg(not(unix))]
             let file = {
@@ -154,7 +167,9 @@ pub fn init_tracing(
                     .create(true)
                     .append(true)
                     .open(path)
-                    .map_err(|e| anyhow::anyhow!("Failed to open log file {}: {}", path.display(), e))?
+                    .map_err(|e| {
+                        anyhow::anyhow!("Failed to open log file {}: {}", path.display(), e)
+                    })?
             };
 
             let (writer, guard) = tracing_appender::non_blocking(file);
@@ -165,7 +180,11 @@ pub fn init_tracing(
                 .compact()
                 .with_writer(writer);
 
-            registry().with(env_filter).with(stdout_layer).with(file_layer).init();
+            registry()
+                .with(env_filter)
+                .with(stdout_layer)
+                .with(file_layer)
+                .init();
             Ok(Some(guard))
         } else {
             registry().with(env_filter).with(stdout_layer).init();
