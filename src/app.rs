@@ -3,6 +3,7 @@
 //! resolves the source, and invokes the appropriate move operation.
 
 use anyhow::Result;
+use aria_move::AriaMoveError;
 use ctrlc;
 use std::sync::{Arc, Mutex};
 use tracing::{error, info};
@@ -137,7 +138,28 @@ pub fn run(args: Args) -> Result<()> {
                 Ok(())
             }
             Err(e) => {
-                error!(error = ?e, "Move failed");
+                if let Some(am) = e.downcast_ref::<AriaMoveError>() {
+                    match am {
+                        AriaMoveError::SourceNotFound(path) => {
+                            error!(kind = "source_not_found", path = %path.display(), "Move failed")
+                        }
+                        AriaMoveError::PermissionDenied { path, context } => {
+                            error!(kind = "permission_denied", path = %path.display(), %context, "Move failed")
+                        }
+                        AriaMoveError::InsufficientSpace {
+                            required,
+                            available,
+                            dest,
+                        } => {
+                            error!(kind = "insufficient_space", required = *required, available = *available, dest = %dest.display(), "Move failed")
+                        }
+                        AriaMoveError::Interrupted => {
+                            error!(kind = "interrupted", "Move aborted by user")
+                        }
+                    }
+                } else {
+                    error!(error = ?e, "Move failed");
+                }
                 Err(e)
             }
         }

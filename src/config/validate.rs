@@ -3,12 +3,9 @@
 
 use anyhow::{bail, Context, Result};
 use std::fs;
-
-#[cfg(unix)]
-use libc;
-
 use tracing::{debug, error, info};
 
+use crate::platform::ensure_secure_directory;
 use crate::utils::is_writable_probe;
 
 use super::types::Config;
@@ -62,12 +59,6 @@ impl Config {
                     self.completed_base.display()
                 )
             })?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ =
-                    fs::set_permissions(&self.completed_base, fs::Permissions::from_mode(0o700));
-            }
             info!(
                 "Created completed base directory: {}",
                 self.completed_base.display()
@@ -110,77 +101,9 @@ impl Config {
             );
         }
 
-        // Unix-specific ownership & permission checks
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::{MetadataExt, PermissionsExt};
-
-            // download_base permissions/ownership
-            let db_meta = fs::metadata(&self.download_base).with_context(|| {
-                format!(
-                    "Failed to stat download base '{}'",
-                    self.download_base.display()
-                )
-            })?;
-            if db_meta.permissions().mode() & 0o022 != 0 {
-                bail!("Download base '{}' is group/world-writable; refuse to operate on insecure directory", self.download_base.display());
-            }
-            if db_meta.uid() != unsafe { libc::geteuid() } {
-                bail!(
-                    "Download base '{}' is not owned by current user (uid {})",
-                    self.download_base.display(),
-                    unsafe { libc::geteuid() }
-                );
-            }
-
-            // completed_base permissions/ownership
-            let cb_meta = fs::metadata(&self.completed_base).with_context(|| {
-                format!(
-                    "Failed to stat completed base '{}'",
-                    self.completed_base.display()
-                )
-            })?;
-            if cb_meta.permissions().mode() & 0o022 != 0 {
-                bail!("Completed base '{}' is group/world-writable; refuse to operate on insecure directory", self.completed_base.display());
-            }
-            if cb_meta.uid() != unsafe { libc::geteuid() } {
-                bail!(
-                    "Completed base '{}' is not owned by current user (uid {})",
-                    self.completed_base.display(),
-                    unsafe { libc::geteuid() }
-                );
-            }
-        }
-
-        // Windows: minimal checks + warning (full ACL/SID checks not implemented)
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::MetadataExt;
-            const FILE_ATTRIBUTE_READONLY: u32 = 0x0000_0001;
-
-            for (label, path) in [
-                ("download_base", &self.download_base),
-                ("completed_base", &self.completed_base),
-            ] {
-                if let Ok(meta) = fs::metadata(path) {
-                    let attrs = meta.file_attributes();
-                    if attrs & FILE_ATTRIBUTE_READONLY != 0 {
-                        bail!(
-                            "{} '{}' has the READONLY attribute set; cannot write",
-                            label,
-                            path.display()
-                        );
-                    }
-                }
-            }
-
-            tracing::warn!(
-                "Windows ACL validation not implemented. Ensure:\n\
-                 1. Directories are owned by the current user\n\
-                 2. 'Everyone' does NOT have Write permissions\n\
-                 3. Use `icacls <path>` to verify ACLs manually"
-            );
-        }
+        // Platform-specific directory security checks
+        ensure_secure_directory(&self.download_base, "download_base")?;
+        ensure_secure_directory(&self.completed_base, "completed_base")?;
 
         info!(
             "Config validated: download='{}' completed='{}' log_file='{}'",

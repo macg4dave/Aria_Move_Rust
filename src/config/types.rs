@@ -5,16 +5,16 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use super::paths::default_log_path;
-use super::{DOWNLOAD_BASE_DEFAULT, COMPLETED_BASE_DEFAULT};
+use super::{COMPLETED_BASE_DEFAULT, DOWNLOAD_BASE_DEFAULT};
 
 /// Program-defined verbosity levels exposed to users/config.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum LogLevel {
-    Quiet,   // only errors
+    Quiet, // only errors
     #[default]
-    Normal,  // informational normal output
-    Info,    // more info (like verbose)
-    Debug,   // debug/trace
+    Normal, // informational normal output
+    Info,  // more info (like verbose)
+    Debug, // debug/trace
 }
 
 impl LogLevel {

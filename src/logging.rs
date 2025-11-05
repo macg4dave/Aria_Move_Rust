@@ -13,10 +13,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry;
 use tracing_subscriber::util::SubscriberInitExt;
 
-#[cfg(unix)]
-use libc;
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use aria_move::platform::open_log_file_secure_append;
 
 /// Human-friendly timestamp formatter (DD/MM/YY HH:MM:SS)
 struct LocalHumanTime;
@@ -81,33 +78,15 @@ pub fn init_tracing(
                 }
                 Ok(false) => {}
             }
-
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).ok();
             }
 
-            #[cfg(unix)]
-            let file = {
-                let mut opts = std::fs::OpenOptions::new();
-                opts.create(true).append(true);
-                opts.mode(0o600);
-                opts.custom_flags(libc::O_NOFOLLOW);
-                opts.open(path).map_err(|e| {
-                    anyhow::anyhow!("Failed to open log file {}: {}", path.display(), e)
-                })?
-            };
-            #[cfg(not(unix))]
-            let file = {
-                std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(path)
-                    .map_err(|e| {
-                        anyhow::anyhow!("Failed to open log file {}: {}", path.display(), e)
-                    })?
-            };
-
+            let file = open_log_file_secure_append(path).map_err(|e| {
+                anyhow::anyhow!("Failed to open log file {}: {}", path.display(), e)
+            })?;
             let (writer, guard) = tracing_appender::non_blocking(file);
+
             let file_layer = tsfmt::layer()
                 .event_format(tsfmt::format().json())
                 .with_timer(LocalHumanTime)
@@ -146,33 +125,15 @@ pub fn init_tracing(
                 }
                 Ok(false) => {}
             }
-
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).ok();
             }
 
-            #[cfg(unix)]
-            let file = {
-                let mut opts = std::fs::OpenOptions::new();
-                opts.create(true).append(true);
-                opts.mode(0o600);
-                opts.custom_flags(libc::O_NOFOLLOW);
-                opts.open(path).map_err(|e| {
-                    anyhow::anyhow!("Failed to open log file {}: {}", path.display(), e)
-                })?
-            };
-            #[cfg(not(unix))]
-            let file = {
-                std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(path)
-                    .map_err(|e| {
-                        anyhow::anyhow!("Failed to open log file {}: {}", path.display(), e)
-                    })?
-            };
-
+            let file = open_log_file_secure_append(path).map_err(|e| {
+                anyhow::anyhow!("Failed to open log file {}: {}", path.display(), e)
+            })?;
             let (writer, guard) = tracing_appender::non_blocking(file);
+
             let file_layer = tsfmt::layer()
                 .with_timer(LocalHumanTime)
                 .with_level(true)

@@ -10,15 +10,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::{debug, info};
 
-#[cfg(unix)]
-use libc;
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt as UnixOpenOptionsExt;
-
 use super::paths::{default_config_path, default_log_path, path_has_symlink_ancestor};
-use super::{DOWNLOAD_BASE_DEFAULT, COMPLETED_BASE_DEFAULT};
+use super::{COMPLETED_BASE_DEFAULT, DOWNLOAD_BASE_DEFAULT};
 
 use crate::config::types::LogLevel;
+use crate::platform::{set_dir_mode_0700, set_file_mode_0600, write_config_secure_new_0600};
 
 /// Struct mirroring the XML config for deserialization.
 #[derive(Debug, Deserialize)]
@@ -125,11 +121,7 @@ pub fn create_template_config(path: &Path) -> Result<()> {
 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
-        }
+        let _ = set_dir_mode_0700(parent);
     }
 
     let suggested_log = default_log_path()
@@ -143,28 +135,8 @@ pub fn create_template_config(path: &Path) -> Result<()> {
         suggested_log
     );
 
-    #[cfg(unix)]
-    {
-        use std::fs::OpenOptions;
-        let mut opts = OpenOptions::new();
-        opts.write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW);
-        let mut f = opts.open(path)?;
-        use std::io::Write;
-        f.write_all(content.as_bytes())?;
-    }
-    #[cfg(not(unix))]
-    {
-        fs::write(path, content)?;
-    }
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
-    }
+    write_config_secure_new_0600(path, content.as_bytes())?;
+    let _ = set_file_mode_0600(path);
 
     info!("Created template config at {}", path.display());
     Ok(())

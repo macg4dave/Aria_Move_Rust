@@ -2,27 +2,28 @@
 //! Attempts atomic rename; on cross-filesystem or errors, falls back to safe copy+rename.
 //! Preserves metadata if requested and uses an advisory move lock.
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::{info, warn};
 
 use crate::config::Config;
+use crate::errors::AriaMoveError;
 use crate::shutdown;
 use crate::utils::{ensure_not_base, stable_file_probe, unique_destination};
 
 use super::atomic::try_atomic_move;
 use super::copy::safe_copy_and_rename_with_metadata;
-use super::disk::check_disk_space;
 use super::helpers::io_error_with_help;
 use super::lock::acquire_move_lock;
 use super::meta::maybe_preserve_metadata;
+use crate::platform::check_disk_space;
 
 /// Move a single file into `completed_base`.
 pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
     if shutdown::is_requested() {
-        bail!("shutdown requested");
+        return Err(AriaMoveError::Interrupted.into());
     }
 
     let _move_lock = acquire_move_lock(src)?;
@@ -37,10 +38,11 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
         info!(action = "mkdir -p", path = %dest_dir.display(), "dry-run");
         if let Some(parent) = dest_dir.parent() {
             if !(parent.exists() && !parent.metadata()?.permissions().readonly()) {
-                bail!(
-                    "dry-run check: cannot create {} (parent missing or readonly)",
-                    dest_dir.display()
-                );
+                return Err(AriaMoveError::PermissionDenied {
+                    path: dest_dir.to_path_buf(),
+                    context: "dry-run parent missing or readonly".into(),
+                }
+                .into());
             }
         }
         // Choose an example destination to report to caller
