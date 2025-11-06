@@ -10,7 +10,7 @@ description = "A robust tool to move completed downloads for aria2c."
 anyhow = "1"
 filetime = "0.2"
 dunce = "1.0"
-libc = { version = "0.2", optional = false }            # + added (Unix)
+libc = "0.2"            # + added (Unix)
 windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }  # + added (Windows)
 clap = { version = "4.2", features = ["derive"] }
 tracing = "0.1"
@@ -28,6 +28,7 @@ ctrlc = "3.4"
 thiserror = "2.0.17"
 
 [dev-dependencies]
+assert_cmd = "2.0"
 tempfile = "3.6"
 assert_fs = "1.0"
 

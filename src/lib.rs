@@ -12,11 +12,14 @@ pub mod platform;
 pub mod shutdown;
 pub mod utils;
 
-// Public API (stable)
-// Config
-pub use config::paths::{default_config_path, default_log_path, path_has_symlink_ancestor};
+// Re-exports for tests and binaries
 pub use config::types::{Config, LogLevel};
-pub use config::xml::{ensure_default_config_exists, load_config_from_xml};
+
+// Public API
+pub use config::paths::{default_config_path, default_log_path, path_has_symlink_ancestor};
+pub use config::xml::{
+    load_config_from_default_xml, load_config_from_xml_env, load_config_from_xml_path,
+};
 
 // Operations
 pub use fs_ops::{move_dir, move_entry, move_file, resolve_source_path, safe_copy_and_rename};

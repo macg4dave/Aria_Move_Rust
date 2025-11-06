@@ -7,7 +7,7 @@
 //! - This module only reads/writes the config file; directory validation happens elsewhere.
 //! - Unknown XML fields cause a hard failure (panic) to surface misconfigurations early.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use quick_xml::de::from_str as from_xml_str;
 use serde::Deserialize;
 use std::env;
@@ -19,7 +19,7 @@ use tracing::{debug, info};
 use super::paths::{default_config_path, default_log_path, path_has_symlink_ancestor};
 use super::{COMPLETED_BASE_DEFAULT, DOWNLOAD_BASE_DEFAULT};
 
-use crate::config::types::LogLevel;
+use crate::config::types::{Config, LogLevel};
 use crate::platform::{set_dir_mode_0700, set_file_mode_0600, write_config_secure_new_0600};
 
 /// Struct mirroring the XML config for deserialization.
@@ -197,4 +197,84 @@ pub fn ensure_default_config_exists() -> Option<PathBuf> {
             None
         }
     }
+}
+
+// Minimal XML loader for tests & simple configs.
+// - Not a full XML parser, but good enough for the simple tag format used in tests.
+// - Returns a Config with values from the XML, falling back to Config::default() for missing tags.
+
+fn extract_tag(contents: &str, tag: &str) -> Option<String> {
+    let open = format!("<{}>", tag);
+    let close = format!("</{}>", tag);
+    let a = contents.find(&open)?;
+    let b = contents.find(&close)?;
+    let start = a + open.len();
+    if start > b {
+        return None;
+    }
+    Some(contents[start..b].trim().to_string())
+}
+
+// Map XmlConfig -> Config (used by both loaders)
+fn xml_to_config(parsed: XmlConfig) -> Config {
+    let mut cfg = Config::default();
+
+    // Paths
+    cfg.download_base = parsed
+        .download_base
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DOWNLOAD_BASE_DEFAULT));
+    cfg.completed_base = parsed
+        .completed_base
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(COMPLETED_BASE_DEFAULT));
+    cfg.log_file = parsed.log_file.map(PathBuf::from);
+
+    // Log level
+    if let Some(s) = parsed.log_level.as_deref() {
+        if let Some(level) = LogLevel::parse(s) {
+            cfg.log_level = level;
+        }
+    }
+
+    // Flags
+    cfg.preserve_metadata = parsed.preserve_metadata.unwrap_or(false);
+    cfg.recent_window =
+        Duration::from_secs(parsed.recent_window_seconds.unwrap_or(DEFAULT_RECENT_SECS));
+
+    cfg
+}
+
+/// Load a Config from a specific XML file path (quick_xml).
+pub fn load_config_from_xml_path(path: &Path) -> Result<Config> {
+    let contents = fs::read_to_string(path)
+        .with_context(|| format!("read config xml '{}'", path.display()))?;
+    let parsed: XmlConfig = from_xml_str(&contents)
+        .with_context(|| format!("parse config xml '{}'", path.display()))?;
+    Ok(xml_to_config(parsed))
+}
+
+/// If ARIA_MOVE_CONFIG is set, load and return that Config; otherwise Ok(None).
+pub fn load_config_from_xml_env() -> Result<Option<Config>> {
+    if let Some(p) = env::var_os("ARIA_MOVE_CONFIG") {
+        eprintln!("[DEBUG] ARIA_MOVE_CONFIG is set to: {:?}", p);
+        let cfg = load_config_from_xml_path(Path::new(&p))?;
+        eprintln!("[DEBUG] Loaded config - download_base: {}", cfg.download_base.display());
+        eprintln!("[DEBUG] Loaded config - completed_base: {}", cfg.completed_base.display());
+        return Ok(Some(cfg));
+    }
+    eprintln!("[DEBUG] ARIA_MOVE_CONFIG not set, will use default config path");
+    Ok(None)
+}
+
+/// Try loading Config from the platform default config.xml path.
+/// Returns Ok(Some(cfg)) if the file exists and parses; Ok(None) if missing.
+pub fn load_config_from_default_xml() -> Result<Option<Config>> {
+    let path = default_config_path().context("resolve default config path")?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    eprintln!("[INFO] Using config from default XML: {}", path.display());
+    let cfg = load_config_from_xml_path(&path)?;
+    Ok(Some(cfg))
 }

@@ -15,6 +15,7 @@ use tracing::{info, warn};
 
 use crate::config::types::Config;
 use crate::errors::AriaMoveError;
+use crate::platform::check_disk_space;
 use crate::shutdown;
 use crate::utils::{ensure_not_base, stable_file_probe, unique_destination};
 
@@ -22,7 +23,6 @@ use super::atomic::try_atomic_move;
 use super::copy::safe_copy_and_rename_with_metadata;
 use super::lock::{acquire_dir_lock, acquire_move_lock, io_error_with_help};
 use super::metadata;
-use crate::platform::check_disk_space;
 
 /// Move a single file into `completed_base`.
 /// Returns the final destination path.
@@ -116,9 +116,20 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
         }
     }
 
-    // Fallback: ensure destination filesystem has room, then copy -> fsync -> rename.
-    // Optimization: only check disk space if atomic rename failed (likely cross-device).
-    check_disk_space(src, dest_dir)?;
+    // Before copying across filesystems, ensure the destination has enough space.
+    let src_size = fs::metadata(src)
+        .with_context(|| format!("stat source {}", src.display()))?
+        .len();
+    let available = check_disk_space(dest_dir)
+        .with_context(|| format!("check disk space at {}", dest_dir.display()))?;
+    if available < src_size as u64 {
+        return Err(AriaMoveError::InsufficientSpace {
+            required: src_size as u128,
+            available: available as u128,
+            dest: dest_dir.to_path_buf(),
+        }
+        .into());
+    }
     safe_copy_and_rename_with_metadata(src, &dest, config.preserve_metadata)?;
 
     // Remove original after successful copy into place.

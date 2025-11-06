@@ -1,69 +1,52 @@
 #![cfg(unix)]
 
-//! Ensures path_has_symlink_ancestor flags a symlinked parent of the log file directory.
+//! Ensures path_has_symlink_ancestor flags a symlinked parent of a target path.
 //!
-//! Strategy:
-//! - Parent test runs a child process with HOME pointed to a temp dir (isolation).
-//! - Child computes the default log path, replaces its parent dir with a symlink,
-//!   and asserts the helper detects the symlink ancestor.
+//! On macOS, /var is a symlink to /private/var, which can make a naive baseline
+//! check fail. To avoid ambient symlinks, we canonicalize the temp base first and
+//! operate entirely under that canonicalized path.
 
 use std::fs;
 use std::os::unix::fs as unix_fs;
-use std::process::Command;
 use tempfile::tempdir;
 
 #[test]
-fn log_file_symlink_parent_refused() {
-    // Parent sets up isolated HOME and a separate "outside" dir.
-    let temp_home = tempdir().expect("temp HOME");
-    let outside = tempdir().expect("outside target");
+fn detects_symlinked_parent() {
+    // Base temp dir; canonicalize to avoid ambient symlinks (/var -> /private/var on macOS).
+    let td = tempdir().expect("tempdir");
+    let base = fs::canonicalize(td.path()).expect("canonicalize tempdir");
 
-    // Spawn the current test binary to run only the ignored child test under the temp HOME.
-    let me = std::env::current_exe().expect("current test binary");
-    let status = Command::new(me)
-        .arg("--ignored")
-        .arg("log_file_symlink_parent_refused_child")
-        .env("HOME", temp_home.path()) // all HOME-based paths now point into temp
-        .env("ARIA_MOVE_OUTSIDE", outside.path())
-        .status()
-        .expect("spawn child test");
-    assert!(status.success(), "child test failed: {status}");
-}
+    // Construct a log-like path we control: <base>/no_symlink_parent/aria_move/aria_move.log
+    let parent_plain = base.join("no_symlink_parent");
+    let aria_dir = parent_plain.join("aria_move");
+    let log_path = aria_dir.join("aria_move.log");
 
-#[test]
-#[ignore]
-fn log_file_symlink_parent_refused_child() {
-    // Compute the default log path using HOME from the environment (temp HOME from parent).
-    let log_path =
-        aria_move::config::paths::default_log_path().expect("default_log_path should resolve");
+    // Ensure baseline directories exist without symlinks.
+    fs::create_dir_all(&aria_dir).expect("create aria_dir");
 
-    // Baseline: should not report a symlink ancestor yet.
+    // Baseline: no symlink ancestors expected now.
+    let baseline = aria_move::path_has_symlink_ancestor(&log_path).unwrap_or(false);
     assert!(
-        !aria_move::path_has_symlink_ancestor(&log_path).unwrap(),
-        "baseline: no symlink ancestor expected for {}",
+        !baseline,
+        "baseline should have no symlink ancestors: {}",
         log_path.display()
     );
 
-    // Derive the aria_move directory and its parent (e.g., ~/.local/share/aria_move on Linux).
-    let aria_dir = log_path.parent().expect("log_path has parent").to_path_buf();
-    let parent_of_aria = aria_dir.parent().expect("aria_dir has parent");
+    // Create an "outside" real directory to point the symlink to.
+    let outside = base.join("outside_real_dir");
+    fs::create_dir_all(&outside).expect("create outside");
 
-    // Create the parent path (e.g., ~/.local/share or ~/Library/Application Support).
-    fs::create_dir_all(parent_of_aria).unwrap();
+    // Replace aria_dir with a symlink to outside.
+    fs::remove_dir_all(&aria_dir).expect("remove aria_dir");
+    unix_fs::symlink(&outside, &aria_dir).expect("symlink aria_dir -> outside");
 
-    // Replace aria_dir with a symlink to OUTSIDE (still all within our temp HOME).
-    let outside = std::path::PathBuf::from(
-        std::env::var_os("ARIA_MOVE_OUTSIDE").expect("OUTSIDE provided by parent"),
-    );
-    if aria_dir.exists() {
-        fs::remove_dir_all(&aria_dir).unwrap();
-    }
-    unix_fs::symlink(&outside, &aria_dir).unwrap();
-
-    // Now the computed log_path should have a symlinked ancestor.
+    // Now detection should see a symlink ancestor.
+    let detected = aria_move::path_has_symlink_ancestor(&log_path).unwrap_or(false);
     assert!(
-        aria_move::path_has_symlink_ancestor(&log_path).unwrap(),
-        "symlink ancestor should be detected for {}",
-        log_path.display()
+        detected,
+        "symlink ancestor should be detected for {} (aria_dir={}, outside={})",
+        log_path.display(),
+        aria_dir.display(),
+        outside.display()
     );
 }

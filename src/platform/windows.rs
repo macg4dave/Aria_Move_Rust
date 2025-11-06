@@ -10,40 +10,17 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-/// Open log file for appending (best-effort; no symlink defense available via std on Windows).
-pub fn open_log_file_secure_append(path: &Path) -> io::Result<File> {
-    OpenOptions::new().create(true).append(true).open(path)
+// Stubs for Windows builds (adjust with real implementation if needed).
+pub fn open_log_file_secure_append(_path: &Path) -> io::Result<std::fs::File> {
+    std::fs::OpenOptions::new().create(true).append(true).open(_path)
 }
-
-/// Write a new config file atomically (create_new) using a temp file + rename.
-/// Fails if the target already exists. Best-effort security (no ACL changes).
-pub fn write_config_secure_new_0600(path: &Path, contents: &[u8]) -> Result<()> {
-    if path.exists() {
-        bail!("Config file already exists: {}", path.display());
-    }
-    let parent = path
-        .parent()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "config path has no parent"))?;
-
-    // Create a unique sibling temp file, write, fsync, then rename into place.
-    let tmp = tmp_sibling_name(path);
-    let mut f = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&tmp)?;
-    f.write_all(contents)?;
-    f.sync_all()?; // ensure data is on disk before renaming
-    fs::rename(&tmp, path)?;
-    // Note: On Windows, fsync of the parent directory is not generally supported via std.
+pub fn write_config_secure_new_0600(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
+    std::fs::write(path, contents)?;
     Ok(())
 }
-
-/// No-op on Windows; POSIX-style directory modes are not applicable.
 pub fn set_dir_mode_0700(_path: &Path) -> io::Result<()> {
     Ok(())
 }
-
-/// No-op on Windows; POSIX-style file modes are not applicable.
 pub fn set_file_mode_0600(_path: &Path) -> io::Result<()> {
     Ok(())
 }
@@ -66,8 +43,9 @@ pub fn ensure_secure_directory(path: &Path, label: &str) -> Result<()> {
 }
 
 /// No disk-space estimation on Windows in this helper (NYI).
-pub fn check_disk_space(_src: &Path, _dest_dir: &Path) -> Result<()> {
-    Ok(())
+pub fn check_disk_space(_path: &std::path::Path) -> std::io::Result<u64> {
+    // Windows stub: return a large value (no validation)
+    Ok(u64::MAX)
 }
 
 /// Create a sibling temporary filename for atomic write/rename.
