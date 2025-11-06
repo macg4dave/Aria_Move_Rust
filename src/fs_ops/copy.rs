@@ -1,66 +1,49 @@
-//! Safe copy-and-rename helper: copy to temp in dest dir, fsync, rename atomically, fsync dir.
+//! Safe copy-and-rename helper:
+//! - Copies to a temp file in the destination directory
+//! - Ensures data durability (io_copy::copy_streaming fsyncs the temp file)
+//! - Atomically renames temp -> dest (Windows overwrite-safe)
+//! - Fsyncs the destination directory (Unix; handled in atomic::try_atomic_move)
 
 use anyhow::{anyhow, Context, Result};
-use std::fs::{self, File, OpenOptions};
+use std::fs;
 use std::path::Path;
-use std::process;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{io_copy, metadata, util};
+use super::atomic::try_atomic_move;
 use super::lock::io_error_with_help;
 
-/// Core: copy src -> temp in dest dir, fsync temp, rename to dest, fsync parent dir.
+/// Core: copy src -> temp in dest dir, then atomic rename temp -> dest.
+/// Notes:
+/// - io_copy::copy_streaming creates the temp file with O_EXCL and fsyncs it before returning.
+/// - try_atomic_move handles Windows "overwrite" and fsyncs the destination directory on Unix.
 pub fn safe_copy_and_rename(src: &Path, dest: &Path) -> Result<()> {
     let dest_dir = dest
         .parent()
         .ok_or_else(|| anyhow!("destination has no parent: {}", dest.display()))?;
 
+    // Ensure destination directory exists.
     fs::create_dir_all(dest_dir)
         .map_err(io_error_with_help("create destination directory", dest_dir))?;
 
-    let pid = process::id();
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| anyhow!("time error: {}", e))?
-        .as_millis();
-    let tmp_name = format!(".aria_move.tmp.{}.{}", pid, now);
-    let tmp_path = dest_dir.join(&tmp_name);
+    // Allocate a unique temp path within the destination directory.
+    let tmp_path = util::unique_temp_path(dest_dir);
 
+    // Stream the copy (fsyncs temp file internally).
     io_copy::copy_streaming(src, &tmp_path)
         .map_err(io_error_with_help("copy to temporary file", &tmp_path))?;
 
-    let f = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&tmp_path)
-        .map_err(io_error_with_help("open temporary file for sync", &tmp_path))?;
-    f.sync_all()
-        .map_err(io_error_with_help("fsync temporary file", &tmp_path))?;
-
-    #[cfg(windows)]
-    {
-        if dest.exists() {
-            fs::remove_file(dest).map_err(io_error_with_help(
-                "remove existing destination before rename",
-                dest,
-            ))?;
-        }
+    // Atomic rename into final destination (handles Windows overwrite + Unix dir fsync).
+    if let Err(e) = try_atomic_move(&tmp_path, dest) {
+        // Best-effort cleanup of the temp file on failure.
+        let _ = fs::remove_file(&tmp_path);
+        return Err(e).with_context(|| {
+            format!(
+                "rename temporary file '{}' -> '{}'",
+                tmp_path.display(),
+                dest.display()
+            )
+        });
     }
-
-    fs::rename(&tmp_path, dest).map_err(io_error_with_help(
-        "rename temporary file to destination",
-        dest,
-    ))?;
-
-    let dirf = OpenOptions::new()
-        .read(true)
-        .open(dest_dir)
-        .map_err(io_error_with_help(
-            "open destination directory for sync",
-            dest_dir,
-        ))?;
-    dirf.sync_all()
-        .map_err(io_error_with_help("fsync destination directory", dest_dir))?;
 
     Ok(())
 }

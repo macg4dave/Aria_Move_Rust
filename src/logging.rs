@@ -1,13 +1,23 @@
 //! Tracing initialization.
 //! Builds a subscriber with EnvFilter, supports compact or JSON formats, and optional file logging.
+//!
+//! Behavior:
+//! - Log level is driven by LogLevel (no RUST_LOG override here).
+//! - JSON/non-JSON stdout formatting is selected via the `json` flag.
+//! - If `log_file` is provided and passes safety checks, a non-blocking file layer is added.
+//!
+//! Implementation notes:
+//! - File logging uses tracing_appender::non_blocking to avoid blocking on I/O.
+//! - We refuse file logging if any ancestor of the file path is a symlink.
 
 use anyhow::Result;
 use aria_move::{path_has_symlink_ancestor, LogLevel};
 use chrono::Local;
 use std::fmt as stdfmt;
 use std::path::Path;
-use tracing_appender::non_blocking::WorkerGuard;
+use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
+use tracing_subscriber::fmt as tsfmt;
 use tracing_subscriber::fmt::time::FormatTime;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry;
@@ -24,6 +34,7 @@ impl FormatTime for LocalHumanTime {
     }
 }
 
+#[inline]
 fn to_level_filter(lvl: &LogLevel) -> LevelFilter {
     match lvl {
         LogLevel::Quiet => LevelFilter::ERROR,
@@ -33,6 +44,7 @@ fn to_level_filter(lvl: &LogLevel) -> LevelFilter {
     }
 }
 
+#[inline]
 fn env_filter_from_level(level_filter: LevelFilter) -> EnvFilter {
     let level_str = match level_filter {
         LevelFilter::ERROR => "error",
@@ -45,6 +57,46 @@ fn env_filter_from_level(level_filter: LevelFilter) -> EnvFilter {
     EnvFilter::new(level_str)
 }
 
+/// Try to open a non-blocking file writer for logging:
+/// - Refuse if any ancestor is a symlink (prints a warning and returns None)
+/// - Best-effort create parent directory
+/// - Open file for append and wrap with non_blocking
+fn maybe_open_non_blocking_writer(path: &Path) -> Option<(NonBlocking, WorkerGuard)> {
+    match path_has_symlink_ancestor(path) {
+        Ok(true) => {
+            eprintln!(
+                "Refusing to enable file logging: ancestor of {} is a symlink; proceeding without file logging.",
+                path.display()
+            );
+            return None;
+        }
+        Err(e) => {
+            eprintln!(
+                "Error checking log path {} for symlinks: {}; proceeding without file logging.",
+                path.display(),
+                e
+            );
+            return None;
+        }
+        Ok(false) => {}
+    }
+
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    match open_log_file_secure_append(path) {
+        Ok(file) => {
+            let (writer, guard) = tracing_appender::non_blocking(file);
+            Some((writer, guard))
+        }
+        Err(e) => {
+            eprintln!("Failed to open log file {}: {}", path.display(), e);
+            None
+        }
+    }
+}
+
 /// Initialize tracing based on LogLevel and format. Returns an optional WorkerGuard
 /// if a file appender is created (must be held until shutdown to flush logs).
 pub fn init_tracing(
@@ -52,104 +104,53 @@ pub fn init_tracing(
     log_file: Option<&Path>,
     json: bool,
 ) -> Result<Option<WorkerGuard>> {
-    use tracing_subscriber::fmt as tsfmt;
-
     let level_filter = to_level_filter(lvl);
     let env_filter = env_filter_from_level(level_filter);
 
-    if json {
-        let stdout_layer = tsfmt::layer()
+    // Stdout layer (JSON or compact text)
+    let stdout_layer = if json {
+        tsfmt::layer()
             .event_format(tsfmt::format().json())
             .with_timer(LocalHumanTime)
             .with_level(true)
-            .with_target(false);
-
-        if let Some(path) = log_file {
-            match path_has_symlink_ancestor(path) {
-                Ok(true) => {
-                    eprintln!("Refusing to enable file logging: ancestor of {} is a symlink; proceeding without file logging.", path.display());
-                    registry().with(env_filter).with(stdout_layer).init();
-                    return Ok(None);
-                }
-                Err(e) => {
-                    eprintln!("Error checking log path {} for symlinks: {}; proceeding without file logging.", path.display(), e);
-                    registry().with(env_filter).with(stdout_layer).init();
-                    return Ok(None);
-                }
-                Ok(false) => {}
-            }
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).ok();
-            }
-
-            let file = open_log_file_secure_append(path).map_err(|e| {
-                anyhow::anyhow!("Failed to open log file {}: {}", path.display(), e)
-            })?;
-            let (writer, guard) = tracing_appender::non_blocking(file);
-
-            let file_layer = tsfmt::layer()
-                .event_format(tsfmt::format().json())
-                .with_timer(LocalHumanTime)
-                .with_level(true)
-                .with_target(false)
-                .with_writer(writer);
-
-            registry()
-                .with(env_filter)
-                .with(stdout_layer)
-                .with(file_layer)
-                .init();
-            Ok(Some(guard))
-        } else {
-            registry().with(env_filter).with(stdout_layer).init();
-            Ok(None)
-        }
+            .with_target(false)
     } else {
-        let stdout_layer = tsfmt::layer()
+        tsfmt::layer()
             .with_timer(LocalHumanTime)
             .with_level(true)
             .with_target(false)
-            .compact();
+            .compact()
+    };
 
-        if let Some(path) = log_file {
-            match path_has_symlink_ancestor(path) {
-                Ok(true) => {
-                    eprintln!("Refusing to enable file logging: ancestor of {} is a symlink; proceeding without file logging.", path.display());
-                    registry().with(env_filter).with(stdout_layer).init();
-                    return Ok(None);
-                }
-                Err(e) => {
-                    eprintln!("Error checking log path {} for symlinks: {}; proceeding without file logging.", path.display(), e);
-                    registry().with(env_filter).with(stdout_layer).init();
-                    return Ok(None);
-                }
-                Ok(false) => {}
-            }
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).ok();
-            }
-
-            let file = open_log_file_secure_append(path).map_err(|e| {
-                anyhow::anyhow!("Failed to open log file {}: {}", path.display(), e)
-            })?;
-            let (writer, guard) = tracing_appender::non_blocking(file);
-
-            let file_layer = tsfmt::layer()
-                .with_timer(LocalHumanTime)
-                .with_level(true)
-                .with_target(false)
-                .compact()
-                .with_writer(writer);
+    // Optional file layer
+    if let Some(path) = log_file {
+        if let Some((writer, guard)) = maybe_open_non_blocking_writer(path) {
+            let file_layer = if json {
+                tsfmt::layer()
+                    .event_format(tsfmt::format().json())
+                    .with_timer(LocalHumanTime)
+                    .with_level(true)
+                    .with_target(false)
+                    .with_writer(writer)
+            } else {
+                tsfmt::layer()
+                    .with_timer(LocalHumanTime)
+                    .with_level(true)
+                    .with_target(false)
+                    .compact()
+                    .with_writer(writer)
+            };
 
             registry()
                 .with(env_filter)
                 .with(stdout_layer)
                 .with(file_layer)
                 .init();
-            Ok(Some(guard))
-        } else {
-            registry().with(env_filter).with(stdout_layer).init();
-            Ok(None)
+            return Ok(Some(guard));
         }
     }
+
+    // No file layer (either not requested or refused/failed)
+    registry().with(env_filter).with(stdout_layer).init();
+    Ok(None)
 }

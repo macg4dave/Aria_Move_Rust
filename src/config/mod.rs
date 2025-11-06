@@ -4,6 +4,7 @@
 
 pub mod paths;
 pub mod types;
+pub mod xml;
 
 use anyhow::{anyhow, Context, Result};
 use std::fs;
@@ -56,15 +57,6 @@ pub fn ensure_default_config_exists() -> Result<PathBuf> {
         LoadResult::Loaded(_, p) => Ok(p),
         LoadResult::CreatedTemplate(p) => Ok(p),
     }
-}
-
-/// Load config from an XML file. (Stub: returns defaults for now; implement XML parsing later.)
-pub fn load_config_from_xml(path: &Path) -> Result<types::Config> {
-    if !path.exists() {
-        return Err(anyhow!("config file not found: {}", path.display()));
-    }
-    // TODO: parse XML into types::Config. Return defaults for now.
-    Ok(types::Config::default())
 }
 
 /// Public wrapper that checks whether a path has a symlink ancestor.

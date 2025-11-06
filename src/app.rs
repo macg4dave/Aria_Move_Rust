@@ -4,7 +4,6 @@
 
 use anyhow::Result;
 use aria_move::AriaMoveError;
-use ctrlc;
 use std::sync::{Arc, Mutex};
 use tracing::{error, info};
 
@@ -26,15 +25,17 @@ pub fn run(args: Args) -> Result<()> {
             return Ok(());
         }
         match default_config_path() {
-            Some(p) => {
+            Ok(p) => {
                 println!("Default aria_move config path:\n  {}\n", p.display());
                 if p.exists() {
-                    println!("Note: a config file already exists at that location.");
+                    println!("A config file already exists at that location.");
                 } else {
-                    println!("Note: no config file exists there yet. Run without --print-config to create a template.");
+                    println!("No config file exists there yet. Run without --print-config to create a template.");
                 }
             }
-            None => println!("Could not determine a default config path for this environment (HOME/config dir not set)."),
+            Err(e) => {
+                println!("Could not determine a default config path: {e}");
+            }
         }
         return Ok(());
     }

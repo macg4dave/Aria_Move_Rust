@@ -1,12 +1,18 @@
 //! CLI definition and parsing.
 //! Defines Args and provides parse() for command-line handling.
+//!
+//! Notes:
+//! - --source-path takes precedence over the positional SOURCE_PATH (back-compat).
+//! - --debug is a shorthand for --log-level debug.
 
-use clap::Parser;
-use std::path::PathBuf;
+use clap::{Parser, ValueHint};
+use std::path::{Path, PathBuf};
+
+use crate::config::types::{Config, LogLevel};
 
 /// CLI wrapper for aria_move library.
 /// CLI flags override config values (which are loaded from XML if present).
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(
     author,
     version,
@@ -21,19 +27,25 @@ pub struct Args {
 
     /// Source path passed by aria2 (positional kept for compatibility).
     /// Prefer using `--source-path` (order doesn't matter).
-    #[arg(value_name = "SOURCE_PATH")]
+    #[arg(value_name = "SOURCE_PATH", value_hint = ValueHint::AnyPath)]
     pub source_path_pos: Option<PathBuf>,
 
     /// Explicit source path option — allows flags to appear anywhere on the command line.
-    #[arg(long = "source-path", short = 's', value_name = "PATH", help = "Source path (overrides positional)")]
+    #[arg(
+        long = "source-path",
+        short = 's',
+        value_name = "PATH",
+        value_hint = ValueHint::AnyPath,
+        help = "Source path (overrides positional)"
+    )]
     pub source_path: Option<PathBuf>,
 
     /// Optional: override the download base (for testing)
-    #[arg(long, help = "Override the download base directory")]
+    #[arg(long, value_hint = ValueHint::DirPath, help = "Override the download base directory")]
     pub download_base: Option<PathBuf>,
 
     /// Optional: override the completed base (for testing)
-    #[arg(long, help = "Override the completed base directory")]
+    #[arg(long, value_hint = ValueHint::DirPath, help = "Override the completed base directory")]
     pub completed_base: Option<PathBuf>,
 
     /// Enable debug logging (equivalent to `--log-level debug`)
@@ -75,11 +87,42 @@ pub struct Args {
 }
 
 impl Args {
-    /// Return the effective source path: the explicit `--source-path` if provided,
-    /// otherwise the positional SOURCE_PATH (for backwards compatibility).
-    #[allow(dead_code)]
-    pub fn resolved_source(&self) -> Option<&PathBuf> {
-        self.source_path.as_ref().or(self.source_path_pos.as_ref())
+    /// Effective source path: `--source-path` if provided, else positional SOURCE_PATH.
+    #[inline]
+    pub fn resolved_source(&self) -> Option<&Path> {
+        self.source_path
+            .as_deref()
+            .or(self.source_path_pos.as_deref())
+    }
+
+    /// Effective log level derived from flags.
+    /// Precedence: --debug > --log-level value > None (use config default).
+    pub fn effective_log_level(&self) -> Option<LogLevel> {
+        if self.debug {
+            return Some(LogLevel::Debug);
+        }
+        self.log_level
+            .as_deref()
+            .and_then(|s| LogLevel::parse(s))
+    }
+
+    /// Apply CLI overrides to a loaded Config (in-place). No-ops for unset flags.
+    pub fn apply_overrides(&self, cfg: &mut Config) {
+        if let Some(db) = &self.download_base {
+            cfg.download_base = db.clone();
+        }
+        if let Some(cb) = &self.completed_base {
+            cfg.completed_base = cb.clone();
+        }
+        if let Some(level) = self.effective_log_level() {
+            cfg.log_level = level;
+        }
+        if self.dry_run {
+            cfg.dry_run = true;
+        }
+        if self.preserve_metadata {
+            cfg.preserve_metadata = true;
+        }
     }
 }
 

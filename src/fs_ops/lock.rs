@@ -1,22 +1,35 @@
 //! Advisory move lock.
-//! Uses a sidecar lock file and fs2::FileExt to ensure only one process moves a path at a time.
+//! Uses a sidecar lock file to ensure only one process operates in a directory at a time.
+//!
+//! Design:
+//! - We lock by opening/holding a file `.aria_move.dir.lock` inside the target directory.
+//! - Unix: use flock(LOCK_EX) on the file descriptor (blocks until acquired).
+//! - Windows: open the file without sharing (exclusive); retry on sharing violations.
+//!
+//! Notes:
+//! - The lock is released when the DirLock guard is dropped.
+//! - This module returns io::Result to keep low-level errors precise.
+//!
+//! Callers typically use:
+//!   - acquire_move_lock(src_path)       // serialize per-source (parent dir)
+//!   - acquire_dir_lock(destination_dir) // serialize finalization into destination
 
-use anyhow::{bail, Result};
-use fs2::FileExt;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+
 #[cfg(windows)]
 use windows_sys::Win32::{
     Foundation::CloseHandle,
     Storage::FileSystem::{CreateFileW, FILE_ATTRIBUTE_NORMAL, GENERIC_READ, GENERIC_WRITE, OPEN_ALWAYS},
 };
 
-/// Guard type held while a directory-level lock is held.
-/// Kept crate-visible so sibling modules can hold the RAII guard.
+/// RAII guard held while a directory-level lock is active.
 pub(crate) struct DirLock {
     #[cfg(unix)]
     file: File,
@@ -29,8 +42,7 @@ impl Drop for DirLock {
     fn drop(&mut self) {
         #[cfg(unix)]
         {
-            // Unlock by closing; flock releases on fd close.
-            // Best-effort; ignore errors on drop.
+            // Unlock by closing; flock releases on fd close. Best-effort: ignore errors.
             let _ = unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
         }
         #[cfg(windows)]
@@ -46,24 +58,27 @@ fn lock_file_path(dir: &Path) -> PathBuf {
     dir.join(".aria_move.dir.lock")
 }
 
-/// Acquire an exclusive lock file for `dir`. Blocks until acquired.
+/// Acquire an exclusive lock for `dir` by opening/locking a sidecar lock file.
+/// Blocks until acquired. Returns a guard that releases on drop.
 pub(crate) fn acquire_dir_lock(dir: &Path) -> io::Result<DirLock> {
     let lock_path = lock_file_path(dir);
 
     #[cfg(unix)]
     {
-        // Open or create the lock file; 0600 perms by default for new files.
+        // Create or open the lock file with restrictive permissions on first creation.
         let f = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
+            .mode(0o600)
             .open(&lock_path)?;
+
         // Block until an exclusive lock is acquired.
         let rc = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) };
         if rc != 0 {
             return Err(io::Error::last_os_error());
         }
-        Ok(DirLock { file: f, _path: lock_path })
+        return Ok(DirLock { file: f, _path: lock_path });
     }
 
     #[cfg(windows)]
@@ -74,7 +89,12 @@ pub(crate) fn acquire_dir_lock(dir: &Path) -> io::Result<DirLock> {
         use std::thread::sleep;
         use std::time::Duration;
 
-        let wide: Vec<u16> = OsStr::new(&lock_path).encode_wide().chain(once(0)).collect();
+        // Convert Path -> wide string (null-terminated)
+        let wide: Vec<u16> = lock_path
+            .as_os_str()
+            .encode_wide()
+            .chain(once(0))
+            .collect();
 
         loop {
             let handle = unsafe {
@@ -94,7 +114,7 @@ pub(crate) fn acquire_dir_lock(dir: &Path) -> io::Result<DirLock> {
             }
 
             let err = io::Error::last_os_error();
-            // ERROR_SHARING_VIOLATION = 32; fall back to retry
+            // ERROR_SHARING_VIOLATION = 32 -> retry until available
             if let Some(code) = err.raw_os_error() {
                 if code == 32 {
                     sleep(Duration::from_millis(50));
@@ -107,10 +127,7 @@ pub(crate) fn acquire_dir_lock(dir: &Path) -> io::Result<DirLock> {
     }
 }
 
-/// Helper to convert an io::Error into a richer io::Error with context/help text.
-///
-/// Usage:
-///     .map_err(io_error_with_help("open lock file", &lock_path))?;
+/// io::Error adapter with context/hints, suitable for `.map_err(...)` in io::Result code.
 pub(crate) fn io_error_with_help<'a>(
     action: &'a str,
     path: &'a Path,
@@ -118,14 +135,14 @@ pub(crate) fn io_error_with_help<'a>(
     let action = action.to_string();
     let path = path.to_path_buf();
     move |err: std::io::Error| {
-        let raw = err.raw_os_error().map_or("".to_string(), |c| format!(" (os error {})", c));
+        let raw = err.raw_os_error().map_or(String::new(), |c| format!(" (os error {})", c));
         let msg = format!("{} '{}': {}{}", action, path.display(), err, raw);
         std::io::Error::new(err.kind(), msg)
     }
 }
 
-/// Acquire a move lock for the provided source path by locking its parent directory.
-/// This is a small wrapper used by higher-level move logic to serialize claims on a file.
+/// Acquire a move lock for `src` by locking its parent directory.
+/// Serializes operations on the same source path.
 pub(crate) fn acquire_move_lock(src: &Path) -> io::Result<DirLock> {
     let parent = src.parent().unwrap_or_else(|| Path::new("."));
     acquire_dir_lock(parent)

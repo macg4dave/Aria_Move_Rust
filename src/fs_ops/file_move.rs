@@ -1,7 +1,13 @@
-//! File move implementation: atomic rename, fallback to safe copy+rename, optional metadata, locks.
+//! File move implementation:
+//! - Fast path: atomic rename into completed_base
+//! - Fallback: safe copy -> fsync -> atomic rename, then remove source
+//! - Optional: preserve src permissions/timestamps on destination
+//! Concurrency:
+//! - Per-source lock to prevent double-processing of the same item
+//! - Per-destination-base lock to serialize finalization inside completed_base
 
 use anyhow::{anyhow, Context, Result};
-use std::fs::{self, File};
+use std::fs::{self};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -16,26 +22,29 @@ use super::atomic::try_atomic_move;
 use super::copy::safe_copy_and_rename_with_metadata;
 use super::lock::{acquire_dir_lock, acquire_move_lock, io_error_with_help};
 use super::metadata;
-use super::{claim, io_copy, space, util};
 use crate::platform::check_disk_space;
 
 /// Move a single file into `completed_base`.
 /// Returns the final destination path.
 pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
+    // Honor shutdown request early.
     if shutdown::is_requested() {
         return Err(AriaMoveError::Interrupted.into());
     }
-    // Acquire per-file move lock and verify readiness.
+
+    // Serialize on this source and ensure it's stable (size/mtime unchanged briefly).
     let _move_lock = acquire_move_lock(src)?;
     ensure_not_base(&config.download_base, src)?;
     stable_file_probe(src, Duration::from_millis(200), 3)?;
 
-    // Resolve destination path (unique if exists).
+    // Compute final destination path (deduplicate name if needed).
     let dest_dir = &config.completed_base;
+
     if !config.dry_run {
         fs::create_dir_all(dest_dir)
             .map_err(io_error_with_help("create destination directory", dest_dir))?;
     } else {
+        // Dry-run: keep a light permission check to surface obvious issues without writing.
         info!(action = "mkdir -p", path = %dest_dir.display(), "dry-run");
         if let Some(parent) = dest_dir.parent() {
             if !(parent.exists() && !parent.metadata()?.permissions().readonly()) {
@@ -61,24 +70,28 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
         return Ok(dest);
     }
 
-    // Serialize per-destination directory to avoid races on final rename.
+    // Serialize finalization into completed_base to avoid races on the final rename.
     let _dir_lock = acquire_dir_lock(dest_dir)
         .with_context(|| format!("acquire lock for '{}'", dest_dir.display()))?;
 
-    // Pre-check disk space on destination filesystem for copy fallback.
-    check_disk_space(src, dest_dir)?;
+    // Capture source metadata BEFORE any rename (after rename, src path no longer exists).
+    let meta_before = if config.preserve_metadata {
+        Some(fs::metadata(src).with_context(|| format!("stat {}", src.display()))?)
+    } else {
+        None
+    };
 
-    // 1) Try atomic rename.
+    // Fast path: atomic rename (same filesystem).
     match try_atomic_move(src, &dest) {
         Ok(()) => {
             info!(src = %src.display(), dest = %dest.display(), "Renamed file atomically");
-            if config.preserve_metadata {
-                let meta = fs::metadata(src).with_context(|| format!("stat {}", src.display()))?;
-                metadata::preserve_metadata(&dest, &meta).ok();
+            if let Some(meta) = meta_before.as_ref() {
+                metadata::preserve_metadata(&dest, meta).ok();
             }
             return Ok(dest);
         }
         Err(e) => {
+            // Compute a short hint for logs; still proceed to copy fallback.
             #[cfg(unix)]
             let hint: &str = match e
                 .downcast_ref::<io::Error>()
@@ -103,8 +116,12 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
         }
     }
 
-    // 2) Fallback: safe copy + fsync + atomic rename, optional metadata.
+    // Fallback: ensure destination filesystem has room, then copy -> fsync -> rename.
+    // Optimization: only check disk space if atomic rename failed (likely cross-device).
+    check_disk_space(src, dest_dir)?;
     safe_copy_and_rename_with_metadata(src, &dest, config.preserve_metadata)?;
+
+    // Remove original after successful copy into place.
     fs::remove_file(src).map_err(io_error_with_help("remove original file", src))?;
     Ok(dest)
 }
