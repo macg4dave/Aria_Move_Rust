@@ -7,12 +7,12 @@ use std::path::{Path, PathBuf};
 use tracing::info;
 use walkdir::WalkDir;
 
-use crate::config::Config;
+use crate::config::types::Config;
 use crate::shutdown;
 use crate::utils::{ensure_not_base, file_is_mutable};
 
-use super::helpers::io_error_with_help;
 use super::lock::acquire_move_lock;
+use super::lock::io_error_with_help;
 
 /// Move directory contents into completed_base/<src_dir_name>.
 pub fn move_dir(config: &Config, src_dir: &Path) -> Result<PathBuf> {

@@ -7,7 +7,11 @@ authors = ["Dave"]
 description = "A robust tool to move completed downloads for aria2c."
 
 [dependencies]
-anyhow = "1.0"
+anyhow = "1"
+filetime = "0.2"
+dunce = "1.0"
+libc = { version = "0.2", optional = false }            # + added (Unix)
+windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }  # + added (Windows)
 clap = { version = "4.2", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "json"] }
@@ -19,8 +23,6 @@ serde = { version = "1.0", features = ["derive"] }
 quick-xml = { version = "0.38.3", features = ["serialize"] }
 dirs = "6.0.0"
 chrono = "0.4"
-libc = "0.2"
-filetime = "0.2"
 fs2 = "0.4"
 ctrlc = "3.4"
 thiserror = "2.0.17"

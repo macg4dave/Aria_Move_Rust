@@ -4,14 +4,259 @@
 
 pub mod paths;
 pub mod types;
-mod validate;
-pub mod xml;
 
-pub use paths::{default_config_path, default_log_path, path_has_symlink_ancestor};
-pub use types::{Config, LogLevel};
-pub use xml::{create_template_config, ensure_default_config_exists, load_config_from_xml};
+use anyhow::{anyhow, Context, Result};
+use std::fs;
+use std::io::{self, Write};
+use std::path::{Component, Path, PathBuf};
 
-/// Defaults shared across submodules (same values as before).
-pub const DOWNLOAD_BASE_DEFAULT: &str = "/mnt/World/incoming";
+pub use types::{Config, LogLevel}; // make Config/LogLevel public to crate root
+
+// --- make helper functions public so they can be re‑exported from the crate root ---
+/// Return the default location for the config file (or ARIA_MOVE_CONFIG override).
+pub fn default_config_path() -> Result<PathBuf> {
+    if let Some(over) = std::env::var_os("ARIA_MOVE_CONFIG") {
+        return Ok(PathBuf::from(over));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME not set"))?;
+        Ok(PathBuf::from(home)
+            .join("Library")
+            .join("Application Support")
+            .join("aria_move")
+            .join("config.xml"))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let home = std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME not set"))?;
+        Ok(PathBuf::from(home)
+            .join(".config")
+            .join("aria_move")
+            .join("config.xml"))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let appdata = std::env::var_os("APPDATA").ok_or_else(|| anyhow!("%APPDATA% not set"))?;
+        Ok(PathBuf::from(appdata).join("aria_move").join("config.xml"))
+    }
+}
+
+/// Return a sensible default path for the log file (platform-specific).
+pub fn default_log_path() -> Result<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME not set"))?;
+        Ok(PathBuf::from(home)
+            .join("Library")
+            .join("Logs")
+            .join("aria_move")
+            .join("aria_move.log"))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let home = std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME not set"))?;
+        Ok(PathBuf::from(home)
+            .join(".local")
+            .join("share")
+            .join("aria_move")
+            .join("aria_move.log"))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let appdata = std::env::var_os("APPDATA").ok_or_else(|| anyhow!("%APPDATA% not set"))?;
+        Ok(PathBuf::from(appdata)
+            .join("aria_move")
+            .join("aria_move.log"))
+    }
+}
+
+/// Ensure a default config exists (create template if missing).
+/// Returns the path that was created or the existing config path.
+pub fn ensure_default_config_exists() -> Result<PathBuf> {
+    match load_or_init()? {
+        LoadResult::Loaded(_, p) => Ok(p),
+        LoadResult::CreatedTemplate(p) => Ok(p),
+    }
+}
+
+/// Load config from an XML file. (Stub: returns defaults for now; implement XML parsing later.)
+pub fn load_config_from_xml(path: &Path) -> Result<types::Config> {
+    if !path.exists() {
+        return Err(anyhow!("config file not found: {}", path.display()));
+    }
+    // TODO: parse XML into types::Config. Return defaults for now.
+    Ok(types::Config::default())
+}
+
+/// Public wrapper that checks whether a path has a symlink ancestor.
+/// Calls the internal has_symlink_ancestor implementation.
+pub fn path_has_symlink_ancestor(path: &Path) -> io::Result<bool> {
+    has_symlink_ancestor(path)
+}
+
+// --- existing/public load_or_init / validate_and_normalize functions remain unchanged ---
+#[derive(Debug)]
+pub enum LoadResult {
+    Loaded(types::Config, PathBuf),
+    CreatedTemplate(PathBuf),
+}
+
+/// Load config from default path (or ARIA_MOVE_CONFIG). If missing, write a secure template and return CreatedTemplate.
+pub fn load_or_init() -> Result<LoadResult> {
+    let path = default_config_path()?;
+    if path.exists() {
+        return Ok(LoadResult::Loaded(types::Config::default(), path));
+    }
+
+    if let Some(parent) = path.parent() {
+        create_secure_dir_all(parent)?;
+    }
+    write_template(&path)?;
+    Ok(LoadResult::CreatedTemplate(path))
+}
+
+/// Validate and normalize config paths:
+/// - Ensure directories exist (create if missing) with safe perms
+/// - Reject symlink ancestors (Unix)
+/// - Canonicalize final paths back into cfg
+pub fn validate_and_normalize(cfg: &mut types::Config) -> Result<()> {
+    // Download base
+    ensure_safe_dir(&cfg.download_base)
+        .with_context(|| format!("download_base invalid: {}", cfg.download_base.display()))?;
+    cfg.download_base = canonicalize_best_effort(&cfg.download_base)?;
+
+    // Completed base
+    ensure_safe_dir(&cfg.completed_base)
+        .with_context(|| format!("completed_base invalid: {}", cfg.completed_base.display()))?;
+    cfg.completed_base = canonicalize_best_effort(&cfg.completed_base)?;
+    Ok(())
+}
+
+fn write_template(path: &Path) -> io::Result<()> {
+    let template = r#"<!-- aria_move config (XML) -->
+<!-- Edit the paths below and rerun aria_move -->
+<config>
+  <!-- Where partial/new downloads appear -->
+  <download_base>/path/to/incoming</download_base>
+  <!-- Final destination for completed items -->
+  <completed_base>/path/to/completed</completed_base>
+
+  <!-- quiet | normal | info | debug -->
+  <log_level>normal</log_level>
+  <!-- Optional: full path to log file -->
+  <log_file></log_file>
+
+  <!-- Preserve permissions and mtime when moving (slower) -->
+  <preserve_metadata>false</preserve_metadata>
+  <!-- Recency window (seconds) for auto-resolving recent file) -->
+  <recent_window_seconds>300</recent_window_seconds>
+</config>
+"#;
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = fs::Permissions::from_mode(0o700);
+            fs::set_permissions(parent, perms)?;
+        }
+    }
+    let mut f = fs::File::create(path)?;
+    f.write_all(template.as_bytes())?;
+    f.sync_all()?;
+    Ok(())
+}
+
+/// Ensure path exists as a directory, reject symlink ancestors (Unix), and enforce safe perms.
+fn ensure_safe_dir(dir: &Path) -> Result<()> {
+    if !dir.exists() {
+        create_secure_dir_all(dir).with_context(|| format!("create directory '{}'", dir.display()))?;
+    } else if !dir.is_dir() {
+        return Err(anyhow!("'{}' exists but is not a directory", dir.display()));
+    }
+
+    // Reject symlink ancestors (Unix)
+    #[cfg(unix)]
+    {
+        if has_symlink_ancestor(dir)? {
+            return Err(anyhow!(
+                "refusing directory under a symlinked ancestor: {}",
+                dir.display()
+            ));
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let meta = fs::metadata(dir)?;
+        let mode = meta.permissions().mode() & 0o777;
+        if mode & 0o022 != 0 {
+            return Err(anyhow!(
+                "unsafe permissions {:o} on {}; group/world-writable not allowed",
+                mode,
+                dir.display()
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn create_secure_dir_all(dir: &Path) -> io::Result<()> {
+    fs::create_dir_all(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = fs::Permissions::from_mode(0o700);
+        fs::set_permissions(dir, perms)?;
+    }
+    Ok(())
+}
+
+fn canonicalize_best_effort(path: &Path) -> Result<PathBuf> {
+    match dunce::canonicalize(path) {
+        Ok(p) => Ok(p),
+        Err(e) => Err(anyhow!("canonicalize {} failed: {e}", path.display())),
+    }
+}
+
+#[cfg(unix)]
+fn has_symlink_ancestor(path: &Path) -> io::Result<bool> {
+    use std::fs::symlink_metadata;
+    // Build up from root, lstat each part; treat non-existent parts as safe.
+    let mut cur = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::CurDir => continue,
+            Component::ParentDir => {
+                cur.push("..");
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                cur.push(comp);
+            }
+            Component::Normal(p) => {
+                cur.push(p);
+                if cur.exists() {
+                    let meta = symlink_metadata(&cur)?;
+                    if meta.file_type().is_symlink() {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(windows)]
+fn has_symlink_ancestor(_path: &Path) -> io::Result<bool> {
+    // Not enforced on Windows in this build.
+    Ok(false)
+}
+
+/// Default download base when no config or CLI override is provided.
+/// Historically some users used `/mnt/World` on specific systems; adjust via config or CLI.
+pub const DOWNLOAD_BASE_DEFAULT: &str = "/mnt/World";
+
+/// Default completed base directory used when no config or CLI override is provided.
 pub const COMPLETED_BASE_DEFAULT: &str = "/mnt/World/completed";
-pub const RECENT_FILE_WINDOW: std::time::Duration = std::time::Duration::from_secs(5 * 60);

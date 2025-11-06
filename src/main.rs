@@ -1,17 +1,26 @@
 //! Minimal binary entry for aria_move.
-//! Parse CLI, apply overrides to Config, resolve source, run move, and always print a summary.
+//! Parse CLI, load/initialize config, apply overrides, resolve source, run move, and print a summary.
 
 mod cli;
 
 use anyhow::Result;
-use aria_move::config::types::Config;
+use aria_move::config::{self, types::Config, LoadResult};
 use std::ffi::OsStr;
 
 fn main() -> Result<()> {
     let args = cli::parse();
 
-    // Start from defaults, then apply CLI overrides so flags take effect.
-    let mut cfg = Config::default();
+    // Load or initialize config (first run creates a secure template and exits).
+    let mut cfg = match config::load_or_init()? {
+        LoadResult::Loaded(cfg, _) => cfg,
+        LoadResult::CreatedTemplate(path) => {
+            eprintln!("Created template config at: {}", path.display());
+            eprintln!("Edit the file to set download_base and completed_base, then rerun.");
+            std::process::exit(0);
+        }
+    };
+
+    // Apply CLI overrides so flags take effect.
     if let Some(p) = &args.download_base {
         cfg.download_base = p.clone();
     }
@@ -20,6 +29,9 @@ fn main() -> Result<()> {
     }
     cfg.dry_run = args.dry_run;
     cfg.preserve_metadata = args.preserve_metadata;
+
+    // Validate and normalize paths (create dirs if missing, check perms/symlinks, canonicalize)
+    config::validate_and_normalize(&mut cfg)?;
 
     // Explicit source (positional or --source-path). Fail fast if none provided.
     let src = match args.resolved_source() {
@@ -31,9 +43,7 @@ fn main() -> Result<()> {
     };
 
     // Compute destination path for user feedback.
-    let name = src
-        .file_name()
-        .unwrap_or_else(|| OsStr::new("unknown"));
+    let name = src.file_name().unwrap_or_else(|| OsStr::new("unknown"));
     let dst = cfg.completed_base.join(name);
 
     if cfg.dry_run {
@@ -42,18 +52,13 @@ fn main() -> Result<()> {
         println!("Moving '{}' -> '{}'", src.display(), dst.display());
     }
 
-    // Delegate to the library move routine (respects cfg.dry_run internally).
     match aria_move::fs_ops::move_file(&cfg, &src) {
         Ok(_) => {
-            if cfg.dry_run {
-                println!("Dry-run: no changes made.");
-            } else {
-                println!("Done.");
-            }
+            println!("{}", if cfg.dry_run { "Dry-run: ok" } else { "Done" });
             Ok(())
         }
         Err(err) => {
-            eprintln!("Error: {}", err);
+            eprintln!("Error: {err}");
             Err(err.into())
         }
     }

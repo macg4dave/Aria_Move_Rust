@@ -15,7 +15,7 @@ pub use config::{
 };
 
 pub use fs_ops::{
-    move_dir, move_entry, move_file, resolve_source_path, safe_copy_and_rename, validate_paths,
+    move_dir, move_entry, move_file, resolve_source_path, safe_copy_and_rename,
 };
 
 pub use errors::AriaMoveError;

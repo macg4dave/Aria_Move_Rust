@@ -1,7 +1,7 @@
 use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
 
-use crate::config::Config;
+use crate::config::types::Config;
 use crate::utils::ensure_not_base;
 
 use super::dir_move::move_dir;
