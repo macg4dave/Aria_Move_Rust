@@ -1,5 +1,4 @@
-//! Safe copy-and-rename helper.
-//! Copies to a temp file in the destination directory, fsyncs, renames into place, and fsyncs the parent.
+//! Safe copy-and-rename helper: copy to temp in dest dir, fsync, rename atomically, fsync dir.
 
 use anyhow::{anyhow, Context, Result};
 use std::fs::{self, File, OpenOptions};
@@ -10,11 +9,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use super::{io_copy, metadata, util};
 use super::lock::io_error_with_help;
 
-/// Copy src -> temp-in-dest-dir, fsync temp file, rename temp -> dest, fsync parent dir.
+/// Core: copy src -> temp in dest dir, fsync temp, rename to dest, fsync parent dir.
 pub fn safe_copy_and_rename(src: &Path, dest: &Path) -> Result<()> {
     let dest_dir = dest
         .parent()
-        .ok_or_else(|| anyhow::anyhow!("Destination has no parent: {}", dest.display()))?;
+        .ok_or_else(|| anyhow!("destination has no parent: {}", dest.display()))?;
 
     fs::create_dir_all(dest_dir)
         .map_err(io_error_with_help("create destination directory", dest_dir))?;
@@ -27,8 +26,8 @@ pub fn safe_copy_and_rename(src: &Path, dest: &Path) -> Result<()> {
     let tmp_name = format!(".aria_move.tmp.{}.{}", pid, now);
     let tmp_path = dest_dir.join(&tmp_name);
 
-    // Stream-copy to avoid large memory usage and to ensure we write on the destination fs.
-    io_copy::copy_streaming(src, &tmp_path).map_err(io_error_with_help("copy to temporary file", &tmp_path))?;
+    io_copy::copy_streaming(src, &tmp_path)
+        .map_err(io_error_with_help("copy to temporary file", &tmp_path))?;
 
     let f = OpenOptions::new()
         .read(true)
@@ -66,7 +65,7 @@ pub fn safe_copy_and_rename(src: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Same as safe_copy_and_rename, but optionally preserves src permissions and mtime on dest.
+/// Wrapper: perform safe copy-and-rename, then preserve metadata if requested.
 pub fn safe_copy_and_rename_with_metadata(src: &Path, dest: &Path, preserve: bool) -> Result<()> {
     safe_copy_and_rename(src, dest)?;
     if preserve {

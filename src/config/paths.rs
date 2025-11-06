@@ -1,57 +1,71 @@
 //! Default path helpers and symlink checks.
-//! Determines OS-appropriate config/log paths and detects symlinked ancestors for safety.
+//! - Determines OS-appropriate config/log paths (with ARIA_MOVE_CONFIG override for config).
+//! - Detects symlinked ancestors for safety.
+//!
+//! NOTE: These functions only compute paths; they do not create directories/files.
+//!       Callers are responsible for creating parents if desired.
 
+use anyhow::{anyhow, Result};
 use dirs::{config_dir, data_dir};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// OS-appropriate default config path.
-pub fn default_config_path() -> Option<PathBuf> {
-    if let Some(mut base) = config_dir() {
-        base.push("aria_move");
-        base.push("config.xml");
-        Some(base)
-    } else {
-        std::env::var("HOME").ok().map(|h| {
-            PathBuf::from(h)
-                .join(".config")
-                .join("aria_move")
-                .join("config.xml")
-        })
-    }
+/// Build "<base>/aria_move/<filename>".
+fn app_path(mut base: PathBuf, filename: &str) -> PathBuf {
+    base.push("aria_move");
+    base.push(filename);
+    base
 }
 
-/// OS-appropriate default log file path (data dir).
-pub fn default_log_path() -> Option<PathBuf> {
-    if let Some(mut base) = data_dir() {
-        base.push("aria_move");
-        // ensure dir exists (best-effort)
-        let _ = fs::create_dir_all(&base);
-        base.push("aria_move.log");
-        Some(base)
-    } else {
-        std::env::var("HOME").ok().map(|h| {
-            PathBuf::from(h)
-                .join(".local")
-                .join("share")
-                .join("aria_move")
-                .join("aria_move.log")
-        })
+/// Return the default config file path as a PathBuf.
+/// Precedence:
+/// 1) ARIA_MOVE_CONFIG environment variable (absolute or relative)
+/// 2) Platform config dir (e.g., macOS: ~/Library/Application Support, Linux: ~/.config, Windows: %APPDATA%)
+/// 3) HOME fallback (Linux-style ~/.config)
+pub fn default_config_path() -> Result<PathBuf> {
+    if let Some(over) = std::env::var_os("ARIA_MOVE_CONFIG") {
+        return Ok(PathBuf::from(over));
     }
+
+    if let Some(base) = config_dir() {
+        return Ok(app_path(base, "config.xml"));
+    }
+
+    // Fallback to $HOME/.config/aria_move/config.xml
+    let home = std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME not set"))?;
+    Ok(PathBuf::from(home).join(".config").join("aria_move").join("config.xml"))
+}
+
+/// Return the default log file path as a PathBuf.
+/// Uses the platform data dir (user-writable app data location).
+/// If that is unavailable, falls back to $HOME/.local/share/aria_move/aria_move.log.
+pub fn default_log_path() -> Result<PathBuf> {
+    if let Some(base) = data_dir() {
+        return Ok(app_path(base, "aria_move.log"));
+    }
+
+    // Fallback to $HOME/.local/share/aria_move/aria_move.log
+    let home = std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME not set"))?;
+    Ok(PathBuf::from(home)
+        .join(".local")
+        .join("share")
+        .join("aria_move")
+        .join("aria_move.log"))
 }
 
 /// Return true if any existing ancestor of `path` is a symlink.
+/// Non-existent ancestors are skipped safely.
 pub fn path_has_symlink_ancestor(path: &Path) -> io::Result<bool> {
-    let mut p = path.parent();
-    while let Some(anc) = p {
-        if anc.exists() {
-            let meta = fs::symlink_metadata(anc)?;
+    let mut cur = path.parent();
+    while let Some(dir) = cur {
+        if dir.exists() {
+            let meta = fs::symlink_metadata(dir)?;
             if meta.file_type().is_symlink() {
                 return Ok(true);
             }
         }
-        p = anc.parent();
+        cur = dir.parent();
     }
     Ok(false)
 }

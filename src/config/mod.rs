@@ -10,66 +10,43 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 
-pub use types::{Config, LogLevel}; // make Config/LogLevel public to crate root
+pub use types::{Config, LogLevel};
+pub use paths::{default_config_path, default_log_path};
 
-// --- make helper functions public so they can be re‑exported from the crate root ---
-/// Return the default location for the config file (or ARIA_MOVE_CONFIG override).
-pub fn default_config_path() -> Result<PathBuf> {
-    if let Some(over) = std::env::var_os("ARIA_MOVE_CONFIG") {
-        return Ok(PathBuf::from(over));
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let home = std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME not set"))?;
-        Ok(PathBuf::from(home)
-            .join("Library")
-            .join("Application Support")
-            .join("aria_move")
-            .join("config.xml"))
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let home = std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME not set"))?;
-        Ok(PathBuf::from(home)
-            .join(".config")
-            .join("aria_move")
-            .join("config.xml"))
-    }
-    #[cfg(target_os = "windows")]
-    {
-        let appdata = std::env::var_os("APPDATA").ok_or_else(|| anyhow!("%APPDATA% not set"))?;
-        Ok(PathBuf::from(appdata).join("aria_move").join("config.xml"))
-    }
+// --- existing/public load_or_init / validate_and_normalize functions remain ---
+#[derive(Debug)]
+pub enum LoadResult {
+    Loaded(types::Config, PathBuf),
+    CreatedTemplate(PathBuf),
 }
 
-/// Return a sensible default path for the log file (platform-specific).
-pub fn default_log_path() -> Result<PathBuf> {
-    #[cfg(target_os = "macos")]
-    {
-        let home = std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME not set"))?;
-        Ok(PathBuf::from(home)
-            .join("Library")
-            .join("Logs")
-            .join("aria_move")
-            .join("aria_move.log"))
+/// Load config from default path (or ARIA_MOVE_CONFIG). If missing, write a secure template and return CreatedTemplate.
+pub fn load_or_init() -> Result<LoadResult> {
+    let path = default_config_path()?;
+    if path.exists() {
+        return Ok(LoadResult::Loaded(types::Config::default(), path));
     }
-    #[cfg(target_os = "linux")]
-    {
-        let home = std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME not set"))?;
-        Ok(PathBuf::from(home)
-            .join(".local")
-            .join("share")
-            .join("aria_move")
-            .join("aria_move.log"))
+
+    if let Some(parent) = path.parent() {
+        create_secure_dir_all(parent)?;
     }
-    #[cfg(target_os = "windows")]
-    {
-        let appdata = std::env::var_os("APPDATA").ok_or_else(|| anyhow!("%APPDATA% not set"))?;
-        Ok(PathBuf::from(appdata)
-            .join("aria_move")
-            .join("aria_move.log"))
-    }
+    write_template(&path)?;
+    Ok(LoadResult::CreatedTemplate(path))
+}
+
+/// Validate and normalize config paths:
+/// - Ensure directories exist (create if missing) with safe perms
+/// - Reject symlink ancestors (Unix)
+/// - Canonicalize final paths back into cfg
+pub fn validate_and_normalize(cfg: &mut types::Config) -> Result<()> {
+    ensure_safe_dir(&cfg.download_base)
+        .with_context(|| format!("download_base invalid: {}", cfg.download_base.display()))?;
+    cfg.download_base = canonicalize_best_effort(&cfg.download_base)?;
+
+    ensure_safe_dir(&cfg.completed_base)
+        .with_context(|| format!("completed_base invalid: {}", cfg.completed_base.display()))?;
+    cfg.completed_base = canonicalize_best_effort(&cfg.completed_base)?;
+    Ok(())
 }
 
 /// Ensure a default config exists (create template if missing).
@@ -96,44 +73,6 @@ pub fn path_has_symlink_ancestor(path: &Path) -> io::Result<bool> {
     has_symlink_ancestor(path)
 }
 
-// --- existing/public load_or_init / validate_and_normalize functions remain unchanged ---
-#[derive(Debug)]
-pub enum LoadResult {
-    Loaded(types::Config, PathBuf),
-    CreatedTemplate(PathBuf),
-}
-
-/// Load config from default path (or ARIA_MOVE_CONFIG). If missing, write a secure template and return CreatedTemplate.
-pub fn load_or_init() -> Result<LoadResult> {
-    let path = default_config_path()?;
-    if path.exists() {
-        return Ok(LoadResult::Loaded(types::Config::default(), path));
-    }
-
-    if let Some(parent) = path.parent() {
-        create_secure_dir_all(parent)?;
-    }
-    write_template(&path)?;
-    Ok(LoadResult::CreatedTemplate(path))
-}
-
-/// Validate and normalize config paths:
-/// - Ensure directories exist (create if missing) with safe perms
-/// - Reject symlink ancestors (Unix)
-/// - Canonicalize final paths back into cfg
-pub fn validate_and_normalize(cfg: &mut types::Config) -> Result<()> {
-    // Download base
-    ensure_safe_dir(&cfg.download_base)
-        .with_context(|| format!("download_base invalid: {}", cfg.download_base.display()))?;
-    cfg.download_base = canonicalize_best_effort(&cfg.download_base)?;
-
-    // Completed base
-    ensure_safe_dir(&cfg.completed_base)
-        .with_context(|| format!("completed_base invalid: {}", cfg.completed_base.display()))?;
-    cfg.completed_base = canonicalize_best_effort(&cfg.completed_base)?;
-    Ok(())
-}
-
 fn write_template(path: &Path) -> io::Result<()> {
     let template = r#"<!-- aria_move config (XML) -->
 <!-- Edit the paths below and rerun aria_move -->
@@ -155,15 +94,6 @@ fn write_template(path: &Path) -> io::Result<()> {
 </config>
 "#;
 
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let perms = fs::Permissions::from_mode(0o700);
-            fs::set_permissions(parent, perms)?;
-        }
-    }
     let mut f = fs::File::create(path)?;
     f.write_all(template.as_bytes())?;
     f.sync_all()?;
@@ -228,12 +158,8 @@ fn has_symlink_ancestor(path: &Path) -> io::Result<bool> {
     for comp in path.components() {
         match comp {
             Component::CurDir => continue,
-            Component::ParentDir => {
-                cur.push("..");
-            }
-            Component::RootDir | Component::Prefix(_) => {
-                cur.push(comp);
-            }
+            Component::ParentDir => cur.push(".."),
+            Component::RootDir | Component::Prefix(_) => cur.push(comp),
             Component::Normal(p) => {
                 cur.push(p);
                 if cur.exists() {
