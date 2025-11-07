@@ -1,6 +1,7 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
+use tracing::debug;
 
 use crate::config::types::Config;
 use crate::utils::ensure_not_base;
@@ -15,11 +16,27 @@ use super::file_move::move_file;
 pub fn move_entry(config: &Config, src: &Path) -> Result<PathBuf> {
     ensure_not_base(&config.download_base, src)?;
 
-    let meta = fs::metadata(src).with_context(|| format!("stat {}", src.display()))?;
+    // First use symlink_metadata to detect and reject symlinks explicitly.
+    let lmeta = fs::symlink_metadata(src).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            anyhow!("Source does not exist: {}", src.display())
+        } else {
+            e.into()
+        }
+    })?;
 
-    if meta.is_file() {
+    let ftype = lmeta.file_type();
+    if ftype.is_symlink() {
+        bail!("Refusing to move symlink: {}", src.display());
+    }
+
+    // For regular files/dirs, a second metadata call isn't strictly necessary, but
+    // keep using the symlink-aware result to branch without following links.
+    debug!(path = %src.display(), is_file = ftype.is_file(), is_dir = ftype.is_dir(), "dispatch move_entry");
+
+    if ftype.is_file() {
         move_file(config, src)
-    } else if meta.is_dir() {
+    } else if ftype.is_dir() {
         move_dir(config, src)
     } else {
         bail!(

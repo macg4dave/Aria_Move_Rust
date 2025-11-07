@@ -16,12 +16,14 @@ mod copy;
 mod dir_move;
 mod entry;
 mod file_move;
+mod duplicate;
 mod io_copy;
 mod lock;
 mod metadata;
 mod resolve;
 mod space;
 mod util;
+mod helpers;
 
 //
 // Public API (re-exported)
@@ -32,3 +34,5 @@ pub use entry::move_entry;
 pub use file_move::move_file;
 pub use resolve::resolve_source_path;
 pub use atomic::{try_atomic_move, MoveOutcome}; // exposed for targeted tests & outcome usage
+pub use duplicate::{resolve_destination, OnDuplicate};
+pub use helpers::{io_error_with_help, io_error_with_help_io};

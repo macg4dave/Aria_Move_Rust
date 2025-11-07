@@ -57,6 +57,24 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
         }
     }
 
+    if config.dry_run {
+        // Dry-run: compute and return intended destination without taking locks.
+        let file_name = src
+            .file_name()
+            .ok_or_else(|| anyhow!("Source file missing a file name: {}", src.display()))?;
+        let mut dest = dest_dir.join(file_name);
+        if dest.exists() {
+            dest = unique_destination(&dest);
+        }
+        info!(src = %src.display(), dest = %dest.display(), "dry-run: would move file");
+        return Ok(dest);
+    }
+
+    // Serialize finalization into completed_base to avoid races on destination naming and final rename.
+    let _dir_lock = acquire_dir_lock(dest_dir)
+        .with_context(|| format!("acquire lock for '{}'", dest_dir.display()))?;
+
+    // Now decide final destination name while holding the directory lock.
     let file_name = src
         .file_name()
         .ok_or_else(|| anyhow!("Source file missing a file name: {}", src.display()))?;
@@ -64,15 +82,6 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
     if dest.exists() {
         dest = unique_destination(&dest);
     }
-
-    if config.dry_run {
-        info!(src = %src.display(), dest = %dest.display(), "dry-run: would move file");
-        return Ok(dest);
-    }
-
-    // Serialize finalization into completed_base to avoid races on the final rename.
-    let _dir_lock = acquire_dir_lock(dest_dir)
-        .with_context(|| format!("acquire lock for '{}'", dest_dir.display()))?;
 
     // Capture source metadata BEFORE any rename (after rename, src path no longer exists).
     let meta_before = if config.preserve_metadata {
@@ -128,6 +137,20 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
     safe_copy_and_rename_with_metadata(src, &dest, config.preserve_metadata)?;
 
     // Remove original after successful copy into place.
-    fs::remove_file(src).map_err(io_error_with_help("remove original file", src))?;
+    match fs::remove_file(src) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {/* already gone; ignore */}
+        Err(e) => return Err(io_error_with_help("remove original file", src)(e).into()),
+    }
+
+    // Best-effort fsync of the source parent to persist the deletion on Unix.
+    #[cfg(unix)]
+    if let Some(src_parent) = src.parent() {
+        if let Err(e) = super::util::fsync_dir(src_parent) {
+            warn!(error = %e, dir = %src_parent.display(), "best-effort fsync(src_parent after delete) failed");
+        }
+    }
+
+    info!(src = %src.display(), dest = %dest.display(), "Copied file and removed source");
     Ok(dest)
 }
