@@ -1,7 +1,7 @@
 use std::fs;
 use std::process::Command;
 use tempfile::tempdir;
-use assert_cmd::cargo::cargo_bin;
+// Use macro to avoid deprecated cargo_bin function
 
 #[test]
 fn single_positional_moves_file_to_completed() {
@@ -35,7 +35,7 @@ fn single_positional_moves_file_to_completed() {
     fs::write(&cfg_path, xml).unwrap();
 
     // Run binary with single positional arg: <SOURCE_PATH>
-    let me = cargo_bin("aria_move");
+    let me = assert_cmd::cargo::cargo_bin!("aria_move");
     let out = Command::new(&me)
         .env("ARIA_MOVE_CONFIG", &cfg_path)
         .arg(&src)

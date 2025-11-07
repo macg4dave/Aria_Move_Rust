@@ -60,14 +60,13 @@ pub fn load_config_from_xml() -> Option<LoadedConfig> {
     // 1) Choose config path:
     //    - ARIA_MOVE_CONFIG (if set)
     //    - default per-platform path (best-effort)
-    let env_path = env::var_os("ARIA_MOVE_CONFIG").map(PathBuf::from);
-    let cfg_path = env_path
-        .clone()
-        .or_else(|| default_config_path().ok())?; // Option<PathBuf>
+    // Resolve env override via default_config_path() to keep logic (rel/dir) consistent
+    let env_set = env::var_os("ARIA_MOVE_CONFIG").is_some();
+    let cfg_path = default_config_path().ok()?;
 
     // 2) If missing: create a template (only when using default path), then return None.
     if !cfg_path.exists() {
-        if env_path.is_none() {
+        if !env_set {
             let _ = create_template_config(&cfg_path);
         }
         return None;

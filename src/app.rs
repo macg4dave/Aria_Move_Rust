@@ -122,7 +122,8 @@ pub fn run(args: Args) -> Result<()> {
 
     // Main run (so we can drop guard after)
     let result = (|| -> Result<()> {
-        validate_paths(&cfg)?;
+        // Ensure required directories exist and canonicalize paths
+        aria_move::config::validate_and_normalize(&mut cfg)?;
         let maybe_src_owned = args.resolved_source();
         let src = match resolve_source_path(&cfg, maybe_src_owned.as_deref()) {
             Ok(p) => p,

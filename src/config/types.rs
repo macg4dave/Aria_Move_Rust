@@ -4,6 +4,8 @@
 
 use std::path::PathBuf;
 use std::time::Duration;
+use std::fmt;
+use std::str::FromStr;
 
 use super::{COMPLETED_BASE_DEFAULT, DOWNLOAD_BASE_DEFAULT};
 use super::paths;
@@ -27,11 +29,30 @@ impl LogLevel {
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "quiet" | "error" | "none" => Some(LogLevel::Quiet),
-            "normal" | "info" => Some(LogLevel::Normal),
-            "verbose" | "detailed" => Some(LogLevel::Info),
+            "normal" => Some(LogLevel::Normal),
+            "info" | "verbose" | "detailed" => Some(LogLevel::Info),
             "debug" | "trace" => Some(LogLevel::Debug),
             _ => None,
         }
+    }
+}
+
+impl fmt::Display for LogLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            LogLevel::Quiet => "quiet",
+            LogLevel::Normal => "normal",
+            LogLevel::Info => "info",
+            LogLevel::Debug => "debug",
+        };
+        f.write_str(s)
+    }
+}
+
+impl FromStr for LogLevel {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s).ok_or_else(|| format!("invalid log level: '{s}'"))
     }
 }
 

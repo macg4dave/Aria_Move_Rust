@@ -1,7 +1,7 @@
 use std::fs;
 use std::process::Command;
 use tempfile::tempdir;
-use assert_cmd::cargo::cargo_bin;
+// Using macro form to avoid deprecated cargo_bin function
 
 #[test]
 fn aria2_positional_input_accepted_and_parsed() {
@@ -35,7 +35,7 @@ fn aria2_positional_input_accepted_and_parsed() {
     fs::write(&cfg_path, xml).unwrap();
 
     // Run binary with aria2-style positional args: TASK_ID NUM_FILES SOURCE_PATH
-    let me = cargo_bin("aria_move");
+    let me = assert_cmd::cargo::cargo_bin!("aria_move");
     let out = Command::new(&me)
         .env("ARIA_MOVE_CONFIG", &cfg_path)
         .arg("7b3f1234")

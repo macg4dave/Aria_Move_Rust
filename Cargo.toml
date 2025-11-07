@@ -33,6 +33,7 @@ atty = "0.2"
 assert_cmd = "2.0"
 tempfile = "3.6"
 assert_fs = "1.0"
+serial_test = "3.2"
 
 [features]
 test-helpers = ["tempfile"]
