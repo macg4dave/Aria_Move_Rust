@@ -19,18 +19,18 @@ use crate::config::types::{Config, LogLevel};
     about = "Move completed aria2 downloads safely (Rust)"
 )]
 pub struct Args {
-    /// Aria2 task id (optional, informational)
+    /// Aria2 task id (optional, informational). Ignored for auto-resolution logic.
     pub task_id: Option<String>,
 
-    /// Number of files reported by aria2 (0 = unknown)
+    /// Number of files reported by aria2 (0 = unknown). Used only for heuristics around legacy positional path fallback.
     pub num_files: Option<usize>,
 
     /// Source path passed by aria2 (positional kept for compatibility).
-    /// Prefer using `--source-path` (order doesn't matter).
+    /// Prefer using `--source-path` for clarity; this positional is parsed only if present.
     #[arg(value_name = "SOURCE_PATH", value_hint = ValueHint::AnyPath)]
     pub source_path_pos: Option<PathBuf>,
 
-    /// Explicit source path option — allows flags to appear anywhere on the command line.
+    /// Explicit source path option — preferred way to specify the path; overrides positional.
     #[arg(
         long = "source-path",
         short = 's',
@@ -40,15 +40,15 @@ pub struct Args {
     )]
     pub source_path: Option<PathBuf>,
 
-    /// Optional: override the download base (for testing)
+    /// Override the download base directory (normally configured via XML).
     #[arg(long, value_hint = ValueHint::DirPath, help = "Override the download base directory")]
     pub download_base: Option<PathBuf>,
 
-    /// Optional: override the completed base (for testing)
+    /// Override the completed base directory (normally configured via XML).
     #[arg(long, value_hint = ValueHint::DirPath, help = "Override the completed base directory")]
     pub completed_base: Option<PathBuf>,
 
-    /// Enable debug logging (equivalent to `--log-level debug`)
+    /// Enable debug logging (equivalent to `--log-level debug`).
     #[arg(
         short = 'd',
         long,
@@ -56,7 +56,7 @@ pub struct Args {
     )]
     pub debug: bool,
 
-    /// Set log level. One of: quiet, normal, info, debug
+    /// Set log level. One of: quiet, normal, info, debug.
     #[arg(long, help = "Set log level: quiet, normal, info, debug")]
     pub log_level: Option<String>,
 
@@ -67,21 +67,21 @@ pub struct Args {
     )]
     pub print_config: bool,
 
-    /// Dry-run: log actions but do not change filesystem.
+    /// Dry-run: log actions but do not modify the filesystem.
     #[arg(
         long,
         help = "Show what would be done, but do not modify files/directories"
     )]
     pub dry_run: bool,
 
-    /// Preserve file permissions and mtime when moving (slower). Off by default.
+    /// Preserve permissions, timestamps and xattrs (when feature enabled). Off by default.
     #[arg(
         long,
-        help = "Preserve file permissions and mtime when moving (slower)"
+        help = "Preserve permissions, timestamps and xattrs (when enabled); slower"
     )]
     pub preserve_metadata: bool,
 
-    /// Emit logs in structured JSON (includes timestamp, level, fields)
+    /// Emit logs in structured JSON (includes timestamp, level, and structured fields).
     #[arg(long, help = "Emit logs in structured JSON")]
     pub json: bool,
 }
@@ -113,16 +113,19 @@ impl Args {
         // (hash-like strings) as file paths.
         if self.num_files.is_none() {
             if let Some(t) = &self.task_id {
-                fn looks_like_path(s: &str) -> bool {
-                    s.contains('/') || s.contains('\\') || s.contains('.') || s.contains(':') || s.starts_with('.')
-                }
-                if looks_like_path(t) {
+                if Self::looks_like_path(t) {
                     return Some(std::path::PathBuf::from(t));
                 }
             }
         }
 
         None
+    }
+
+    #[inline]
+    fn looks_like_path(s: &str) -> bool {
+        // Heuristic kept minimal: path separators, extension-like dot, drive-colon, or leading dot.
+        s.contains('/') || s.contains('\\') || s.contains('.') || s.contains(':') || s.starts_with('.')
     }
 
     /// Effective log level derived from flags.

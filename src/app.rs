@@ -9,11 +9,12 @@ use tracing::{error, info};
 use aria_move::output as out;
 
 use aria_move::{
-    default_config_path, ensure_default_config_exists, load_config_from_xml, move_entry,
-    resolve_source_path, shutdown, validate_paths, Config, LogLevel,
+    default_config_path, move_entry, resolve_source_path, shutdown, Config, LogLevel,
 };
+use aria_move::config::{validate_and_normalize, load_or_init, LoadResult};
+use aria_move::config::xml::load_config_from_xml;
 
-use crate::cli::Args;
+use aria_move::cli::Args;
 use crate::logging::init_tracing;
 
 /// Run the CLI application.
@@ -42,7 +43,7 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     // Create template config if none exists (before logging init)
-    if let Some(path) = ensure_default_config_exists() {
+    if let LoadResult::CreatedTemplate(path) = load_or_init()? {
         out::print_success(&format!("A template aria_move config was written to: {}", path.display()));
         out::print_info("Edit the file to set `download_base`, `completed_base` and optionally `log_level` and `log_file`. Example:\n\n<config>\n  <download_base>/path/to/incoming</download_base>\n  <completed_base>/path/to/completed</completed_base>\n  <log_level>normal</log_level>\n  <log_file>/path/to/aria_move.log</log_file>\n</config>\n");
         out::print_info("Then re-run this command. To use a different location set ARIA_MOVE_CONFIG.");
@@ -94,7 +95,7 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     // Initialize logging and capture the guard so we can drop it on signal
-    let guard_opt =
+    let guard_opt: Option<tracing_appender::non_blocking::WorkerGuard> =
         init_tracing(&cfg.log_level, cfg.log_file.as_deref(), args.json).map_err(|e| {
             out::print_error(&format!("Failed to initialize logging: {}", e));
             e
@@ -123,27 +124,28 @@ pub fn run(args: Args) -> Result<()> {
     // Main run (so we can drop guard after)
     let result = (|| -> Result<()> {
         // Ensure required directories exist and canonicalize paths
-        aria_move::config::validate_and_normalize(&mut cfg)?;
+        validate_and_normalize(&mut cfg)?;
         let maybe_src_owned = args.resolved_source();
         let src = match resolve_source_path(&cfg, maybe_src_owned.as_deref()) {
             Ok(p) => p,
             Err(e) => {
                 if let Some(am) = e.downcast_ref::<AriaMoveError>() {
+                    let code = am.code();
                     match am {
                         AriaMoveError::ProvidedNotFile(path) => {
-                            error!(kind = "provided_not_file", path = %path.display(), "Source path is not a regular file")
+                            error!(code, kind = "provided_not_file", path = %path.display(), "Source path is not a regular file")
                         }
                         AriaMoveError::Disappeared(path) => {
-                            error!(kind = "disappeared", path = %path.display(), "Resolved path disappeared before use")
+                            error!(code, kind = "disappeared", path = %path.display(), "Resolved path disappeared before use")
                         }
                         AriaMoveError::NoneFound(base) => {
-                            error!(kind = "none_found", base = %base.display(), "No candidate file found under base")
+                            error!(code, kind = "none_found", base = %base.display(), "No candidate file found under base")
                         }
                         AriaMoveError::BaseInvalid(base) => {
-                            error!(kind = "base_invalid", base = %base.display(), "Download base invalid or not a directory")
+                            error!(code, kind = "base_invalid", base = %base.display(), "Download base invalid or not a directory")
                         }
-                        other => {
-                            error!(kind = "resolve_error", error = ?other, "Failed to resolve a source path")
+                        _ => {
+                            error!(code, kind = "resolve_error", error = ?am, "Failed to resolve a source path")
                         }
                     }
                 } else {
@@ -154,39 +156,50 @@ pub fn run(args: Args) -> Result<()> {
         };
         match move_entry(&cfg, &src) {
             Ok(dest) => {
+                if cfg.dry_run {
+                    out::print_info(&format!(
+                        "Dry-run: would move '{}' -> '{}'",
+                        src.display(),
+                        dest.display()
+                    ));
+                }
                 info!(source = %src.display(), dest = %dest.display(), "Move completed");
                 Ok(())
             }
             Err(e) => {
                 if let Some(am) = e.downcast_ref::<AriaMoveError>() {
+                    let code = am.code();
                     match am {
                         AriaMoveError::SourceNotFound(path) => {
-                            error!(kind = "source_not_found", path = %path.display(), "Move failed")
+                            error!(code, kind = "source_not_found", path = %path.display(), "Move failed")
                         }
                         AriaMoveError::PermissionDenied { path, context } => {
-                            error!(kind = "permission_denied", path = %path.display(), %context, "Move failed")
+                            error!(code, kind = "permission_denied", path = %path.display(), %context, "Move failed")
                         }
                         AriaMoveError::InsufficientSpace {
                             required,
                             available,
                             dest,
                         } => {
-                            error!(kind = "insufficient_space", required = *required, available = *available, dest = %dest.display(), "Move failed")
+                            error!(code, kind = "insufficient_space", required = *required, available = *available, dest = %dest.display(), "Move failed")
                         }
                         AriaMoveError::Interrupted => {
-                            error!(kind = "interrupted", "Move aborted by user")
+                            error!(code, kind = "interrupted", "Move aborted by user")
                         }
                         AriaMoveError::ProvidedNotFile(path) => {
-                            error!(kind = "provided_not_file", path = %path.display(), "Move failed")
+                            error!(code, kind = "provided_not_file", path = %path.display(), "Move failed")
                         }
                         AriaMoveError::Disappeared(path) => {
-                            error!(kind = "disappeared", path = %path.display(), "Move failed")
+                            error!(code, kind = "disappeared", path = %path.display(), "Move failed")
                         }
                         AriaMoveError::NoneFound(base) => {
-                            error!(kind = "none_found", base = %base.display(), "Move failed")
+                            error!(code, kind = "none_found", base = %base.display(), "Move failed")
                         }
                         AriaMoveError::BaseInvalid(base) => {
-                            error!(kind = "base_invalid", base = %base.display(), "Move failed")
+                            error!(code, kind = "base_invalid", base = %base.display(), "Move failed")
+                        }
+                        _ => {
+                            error!(code, kind = "move_error", error = ?am, "Move failed")
                         }
                     }
                 } else {

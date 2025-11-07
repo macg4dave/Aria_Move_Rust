@@ -108,49 +108,50 @@ pub fn init_tracing(
     let level_filter = to_level_filter(lvl);
     let env_filter = env_filter_from_level(level_filter);
 
-    // Stdout layer (JSON or compact text)
-    let stdout_layer = if json {
-        tsfmt::layer()
-            .event_format(tsfmt::format().json())
-            .with_timer(LocalHumanTime)
-            .with_level(true)
-            .with_target(true)
-            .with_thread_ids(true)
-    } else {
-        tsfmt::layer()
-            .with_timer(LocalHumanTime)
-            .with_level(true)
-            .with_target(true)
-            .with_thread_ids(true)
-            .compact()
-    };
+    // Build stdout layer per format and initialize later to avoid type mismatch across branches
 
     // Optional file layer
     if let Some(path) = log_file {
         if let Some((writer, guard)) = maybe_open_non_blocking_writer(path) {
-            let file_layer = if json {
-                tsfmt::layer()
+            if json {
+                let stdout_layer = tsfmt::layer()
+                    .event_format(tsfmt::format().json())
+                    .with_timer(LocalHumanTime)
+                    .with_level(true)
+                    .with_target(true)
+                    .with_thread_ids(true);
+                let file_layer = tsfmt::layer()
                     .event_format(tsfmt::format().json())
                     .with_timer(LocalHumanTime)
                     .with_level(true)
                     .with_target(true)
                     .with_thread_ids(true)
-                    .with_writer(writer)
+                    .with_writer(writer);
+                registry()
+                    .with(env_filter)
+                    .with(stdout_layer)
+                    .with(file_layer)
+                    .init();
             } else {
-                tsfmt::layer()
+                let stdout_layer = tsfmt::layer()
+                    .with_timer(LocalHumanTime)
+                    .with_level(true)
+                    .with_target(true)
+                    .with_thread_ids(true)
+                    .compact();
+                let file_layer = tsfmt::layer()
                     .with_timer(LocalHumanTime)
                     .with_level(true)
                     .with_target(true)
                     .with_thread_ids(true)
                     .compact()
-                    .with_writer(writer)
-            };
-
-            registry()
-                .with(env_filter)
-                .with(stdout_layer)
-                .with(file_layer)
-                .init();
+                    .with_writer(writer);
+                registry()
+                    .with(env_filter)
+                    .with(stdout_layer)
+                    .with(file_layer)
+                    .init();
+            }
             return Ok(Some(guard));
         }
         // maybe_open_non_blocking_writer already printed a short reason to stderr.
@@ -166,6 +167,22 @@ pub fn init_tracing(
     }
 
     // No file layer (either not requested or refused/failed)
-    registry().with(env_filter).with(stdout_layer).init();
+    if json {
+        let stdout_layer = tsfmt::layer()
+            .event_format(tsfmt::format().json())
+            .with_timer(LocalHumanTime)
+            .with_level(true)
+            .with_target(true)
+            .with_thread_ids(true);
+        registry().with(env_filter).with(stdout_layer).init();
+    } else {
+        let stdout_layer = tsfmt::layer()
+            .with_timer(LocalHumanTime)
+            .with_level(true)
+            .with_target(true)
+            .with_thread_ids(true)
+            .compact();
+        registry().with(env_filter).with(stdout_layer).init();
+    }
     Ok(None)
 }
