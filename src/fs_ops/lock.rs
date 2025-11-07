@@ -17,6 +17,12 @@
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
+#[cfg(windows)]
+use std::time::Duration;
+#[cfg(windows)]
+use tracing::warn;
+use tracing::trace;
 
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
@@ -30,7 +36,8 @@ use windows_sys::Win32::{
 };
 
 /// RAII guard held while a directory-level lock is active.
-pub(crate) struct DirLock {
+/// Public for integration tests / advanced callers; stability not guaranteed.
+pub struct DirLock {
     #[cfg(unix)]
     file: File,
     #[cfg(windows)]
@@ -60,8 +67,10 @@ fn lock_file_path(dir: &Path) -> PathBuf {
 
 /// Acquire an exclusive lock for `dir` by opening/locking a sidecar lock file.
 /// Blocks until acquired. Returns a guard that releases on drop.
-pub(crate) fn acquire_dir_lock(dir: &Path) -> io::Result<DirLock> {
+/// Blocking acquire of a directory lock. Waits until the lock is available.
+pub fn acquire_dir_lock(dir: &Path) -> io::Result<DirLock> {
     let lock_path = lock_file_path(dir);
+    let start = Instant::now();
 
     #[cfg(unix)]
     {
@@ -70,6 +79,7 @@ pub(crate) fn acquire_dir_lock(dir: &Path) -> io::Result<DirLock> {
             .read(true)
             .write(true)
             .create(true)
+            .custom_flags(libc::O_CLOEXEC)
             .mode(0o600)
             .open(&lock_path)?;
 
@@ -77,6 +87,12 @@ pub(crate) fn acquire_dir_lock(dir: &Path) -> io::Result<DirLock> {
         let rc = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) };
         if rc != 0 {
             return Err(io::Error::last_os_error());
+        }
+        let waited = start.elapsed();
+        if waited.is_zero() {
+            trace!(path = %lock_path.display(), "lock acquired immediately");
+        } else {
+            trace!(path = %lock_path.display(), waited_ms = waited.as_millis() as u64, "lock acquired after wait");
         }
         return Ok(DirLock { file: f, _path: lock_path });
     }
@@ -96,6 +112,7 @@ pub(crate) fn acquire_dir_lock(dir: &Path) -> io::Result<DirLock> {
             .chain(once(0))
             .collect();
 
+        let mut attempts: u32 = 0;
         loop {
             let handle = unsafe {
                 CreateFileW(
@@ -110,6 +127,8 @@ pub(crate) fn acquire_dir_lock(dir: &Path) -> io::Result<DirLock> {
             };
 
             if handle as isize != -1 {
+                let waited = start.elapsed();
+                trace!(path = %lock_path.display(), attempts = attempts, waited_ms = waited.as_millis() as u64, "lock acquired");
                 return Ok(DirLock { handle: handle as isize, _path: lock_path.clone() });
             }
 
@@ -117,6 +136,10 @@ pub(crate) fn acquire_dir_lock(dir: &Path) -> io::Result<DirLock> {
             // ERROR_SHARING_VIOLATION = 32 -> retry until available
             if let Some(code) = err.raw_os_error() {
                 if code == 32 {
+                    attempts += 1;
+                    if attempts % 10 == 0 {
+                        warn!(path = %lock_path.display(), attempts = attempts, "still waiting for directory lock");
+                    }
                     sleep(Duration::from_millis(50));
                     continue;
                 }
@@ -127,23 +150,83 @@ pub(crate) fn acquire_dir_lock(dir: &Path) -> io::Result<DirLock> {
     }
 }
 
-/// io::Error adapter with context/hints, suitable for `.map_err(...)` in io::Result code.
-pub(crate) fn io_error_with_help<'a>(
-    action: &'a str,
-    path: &'a Path,
-) -> impl FnOnce(std::io::Error) -> std::io::Error + 'a {
-    let action = action.to_string();
-    let path = path.to_path_buf();
-    move |err: std::io::Error| {
-        let raw = err.raw_os_error().map_or(String::new(), |c| format!(" (os error {})", c));
-        let msg = format!("{} '{}': {}{}", action, path.display(), err, raw);
-        std::io::Error::new(err.kind(), msg)
+/// Try to acquire an exclusive lock for `dir` without blocking.
+/// Returns Ok(Some(DirLock)) on success, Ok(None) if another process holds the lock,
+/// or Err on unexpected errors.
+/// Non-blocking attempt to acquire a directory lock.
+/// Returns Ok(None) if lock is currently held elsewhere.
+pub fn try_acquire_dir_lock(dir: &Path) -> io::Result<Option<DirLock>> {
+    let lock_path = lock_file_path(dir);
+    let start = Instant::now();
+
+    #[cfg(unix)]
+    {
+        let f = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .custom_flags(libc::O_CLOEXEC)
+            .mode(0o600)
+            .open(&lock_path)?;
+
+        let rc = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if rc == 0 {
+            trace!(path = %lock_path.display(), waited_ms = start.elapsed().as_millis() as u64, "try-lock success");
+            return Ok(Some(DirLock { file: f, _path: lock_path }));
+        }
+        let err = io::Error::last_os_error();
+        if let Some(code) = err.raw_os_error() {
+            if code == libc::EWOULDBLOCK {
+                trace!(path = %lock_path.display(), "try-lock would block");
+                return Ok(None);
+            }
+        }
+        return Err(err);
+    }
+
+    #[cfg(windows)]
+    {
+        use std::ffi::OsStr;
+        use std::iter::once;
+        use std::os::windows::ffi::OsStrExt;
+
+        let wide: Vec<u16> = lock_path
+            .as_os_str()
+            .encode_wide()
+            .chain(once(0))
+            .collect();
+
+        let handle = unsafe {
+            CreateFileW(
+                wide.as_ptr(),
+                GENERIC_READ | GENERIC_WRITE,
+                0,
+                std::ptr::null_mut(),
+                OPEN_ALWAYS,
+                FILE_ATTRIBUTE_NORMAL,
+                0,
+            )
+        };
+        if handle as isize != -1 {
+            trace!(path = %lock_path.display(), waited_ms = start.elapsed().as_millis() as u64, "try-lock success");
+            return Ok(Some(DirLock { handle: handle as isize, _path: lock_path }));
+        }
+        let err = io::Error::last_os_error();
+        if let Some(code) = err.raw_os_error() {
+            // ERROR_SHARING_VIOLATION => already locked
+            if code == 32 {
+                trace!(path = %lock_path.display(), "try-lock would block");
+                return Ok(None);
+            }
+        }
+        Err(err)
     }
 }
 
 /// Acquire a move lock for `src` by locking its parent directory.
 /// Serializes operations on the same source path.
-pub(crate) fn acquire_move_lock(src: &Path) -> io::Result<DirLock> {
+/// Acquire a move lock for a source path (locks its parent directory).
+pub fn acquire_move_lock(src: &Path) -> io::Result<DirLock> {
     let parent = src.parent().unwrap_or_else(|| Path::new("."));
     acquire_dir_lock(parent)
 }

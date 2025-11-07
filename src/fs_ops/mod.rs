@@ -36,3 +36,7 @@ pub use resolve::resolve_source_path;
 pub use atomic::{try_atomic_move, MoveOutcome}; // exposed for targeted tests & outcome usage
 pub use duplicate::{resolve_destination, OnDuplicate};
 pub use helpers::{io_error_with_help, io_error_with_help_io};
+pub use metadata::{preserve_metadata, preserve_xattrs};
+
+// Locking API (currently considered advanced; subject to change)
+pub use lock::{acquire_dir_lock, acquire_move_lock, try_acquire_dir_lock, DirLock};

@@ -27,4 +27,20 @@ pub enum AriaMoveError {
     /// A cooperative shutdown/interrupt was requested (e.g., SIGINT).
     #[error("Operation interrupted by user")]
     Interrupted,
+
+    // --- Resolution-specific errors ---
+    /// Provided path exists but is not a regular file (e.g., directory, symlink if disallowed).
+    #[error("Provided path is not a regular file: {0}")]
+    ProvidedNotFile(PathBuf),
+    /// Provided path existed initially but disappeared before use.
+    #[error("Resolved file disappeared: {0}")]
+    Disappeared(PathBuf),
+    /// Automatic resolution found no candidate within the recency window.
+    // Removed: RecentNotFound (fallback selects overall newest when none recent)
+    /// Automatic resolution fell back (when allowed) and still found nothing at all.
+    #[error("No file found under base: {0}")]
+    NoneFound(PathBuf),
+    /// Download base missing or not a directory.
+    #[error("Download base invalid: {0}")]
+    BaseInvalid(PathBuf),
 }

@@ -17,7 +17,8 @@ use crate::config::types::Config;
 use crate::shutdown;
 use crate::utils::{ensure_not_base, file_is_mutable};
 
-use super::lock::{acquire_dir_lock, acquire_move_lock, io_error_with_help};
+use super::lock::{acquire_dir_lock, acquire_move_lock};
+use super::io_error_with_help;
 use super::space;
 
 /// Move directory contents into completed_base/<src_dir_name>.
@@ -170,9 +171,12 @@ pub fn move_dir(config: &Config, src_dir: &Path) -> Result<PathBuf> {
 
         // Copy file data
         fs::copy(path, &dst).map_err(io_error_with_help("copy file to destination", &dst))?;
-        // Best-effort metadata preservation
-        if let Ok(src_meta) = fs::metadata(path) {
-            let _ = super::metadata::preserve_metadata(&dst, &src_meta);
+        // Metadata preservation; strict failures propagate when enabled
+        if config.preserve_metadata {
+            if let Ok(src_meta) = fs::metadata(path) {
+                let _ = super::metadata::preserve_metadata(&dst, &src_meta);
+                let _ = super::metadata::preserve_xattrs(path, &dst);
+            }
         }
         Ok(())
     });

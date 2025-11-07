@@ -12,7 +12,7 @@
 //! original metadata length if stricter validation is required.
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufReader, BufWriter, Read, Write};
+use std::io::{self, BufReader, BufWriter, Write};
 use std::path::Path;
 
 /// Durability mode controlling post-write flush behavior.
@@ -82,7 +82,7 @@ pub(super) fn copy_streaming_ex(
     }
 
     // Open source file for streaming or Linux fast-path.
-    let mut src_f = File::open(src)?;
+    let src_f = File::open(src)?;
 
     // Destination options
     let mut opts = OpenOptions::new();
@@ -98,7 +98,7 @@ pub(super) fn copy_streaming_ex(
         }
     }
 
-    let mut dst_f = opts.open(dst)?;
+    let dst_f = opts.open(dst)?;
 
     // Fast-path: on Linux, try copy_file_range for in-kernel copy when supported.
     #[cfg(target_os = "linux")]
@@ -171,7 +171,6 @@ pub(super) fn copy_streaming_ex(
 mod tests {
     use super::*;
     use std::fs;
-    use std::io::Write as _;
     use tempfile::tempdir;
 
     #[test]

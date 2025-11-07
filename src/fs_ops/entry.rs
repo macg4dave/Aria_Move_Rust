@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::debug;

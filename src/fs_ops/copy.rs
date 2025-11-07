@@ -10,7 +10,7 @@ use std::path::Path;
 
 use super::{io_copy, metadata, util};
 use super::atomic::try_atomic_move;
-use super::lock::io_error_with_help;
+use super::io_error_with_help;
 
 /// Core: copy src -> temp in dest dir, then atomic rename temp -> dest.
 /// Notes:
@@ -63,12 +63,16 @@ pub fn safe_copy_and_rename(src: &Path, dest: &Path) -> Result<()> {
 }
 
 /// Wrapper: perform safe copy-and-rename, then preserve metadata if requested.
+/// When `strict` is true and `preserve` is true, any failure to preserve metadata returns an error.
 pub fn safe_copy_and_rename_with_metadata(src: &Path, dest: &Path, preserve: bool) -> Result<()> {
     safe_copy_and_rename(src, dest)?;
     if preserve {
         let meta = fs::metadata(src).with_context(|| format!("stat {}", src.display()))?;
         metadata::preserve_metadata(dest, &meta)
             .with_context(|| format!("preserve metadata for {}", dest.display()))?;
+        // Preserve xattrs as part of "preserve everything" when enabled
+        metadata::preserve_xattrs(src, dest)
+            .with_context(|| format!("preserve xattrs for {}", dest.display()))?;
     }
     Ok(())
 }
