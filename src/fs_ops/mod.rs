@@ -31,3 +31,4 @@ pub use dir_move::move_dir;
 pub use entry::move_entry;
 pub use file_move::move_file;
 pub use resolve::resolve_source_path;
+pub use atomic::{try_atomic_move, MoveOutcome}; // exposed for targeted tests & outcome usage

@@ -38,7 +38,7 @@ struct XmlConfig {
     #[serde(rename = "preserve_metadata")]
     preserve_metadata: Option<bool>,
     /// Optional override of recent_window in seconds
-    #[serde(rename = "recent_window_seconds")]
+    #[serde(rename = "recent_window_seconds", default, deserialize_with = "de_u64_trimmed_opt")]
     recent_window_seconds: Option<u64>,
 }
 
@@ -53,6 +53,16 @@ type LoadedConfig = (
 );
 
 const DEFAULT_RECENT_SECS: u64 = 300;
+
+// Custom deserializer that trims surrounding whitespace for optional u64
+fn de_u64_trimmed_opt<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    let opt: Option<String> = Option::deserialize(deserializer)?;
+    Ok(opt.and_then(|s| s.trim().parse::<u64>().ok()))
+}
 
 /// Read config from XML. OS-aware default path used if ARIA_MOVE_CONFIG not set.
 /// Returns None if no meaningful settings are present or the file doesn’t exist.
@@ -80,12 +90,11 @@ pub fn load_config_from_xml() -> Option<LoadedConfig> {
             // Fail hard on unknown field (serde deny_unknown_fields); else, log and return None.
             let msg = e.to_string();
             if msg.contains("unknown field") {
-                eprintln!(
-                    "Unknown field in config {}: {}. Refusing to start.",
+                panic!(
+                    "Unknown field in aria_move config {}: {}. Refusing to start.",
                     cfg_path.display(),
                     msg
                 );
-                panic!("Unknown field in aria_move config");
             }
             debug!(
                 "Failed to parse config.xml at {}: {}",
@@ -97,10 +106,25 @@ pub fn load_config_from_xml() -> Option<LoadedConfig> {
     };
 
     // 4) Map fields
-    let download_base = parsed.download_base.map(PathBuf::from);
-    let completed_base = parsed.completed_base.map(PathBuf::from);
-    let log_level = parsed.log_level.and_then(|s| LogLevel::parse(&s));
-    let log_file = parsed.log_file.map(PathBuf::from);
+    let download_base = parsed
+        .download_base
+        .as_deref()
+        .map(|s| PathBuf::from(s.trim()));
+    let completed_base = parsed
+        .completed_base
+        .as_deref()
+        .map(|s| PathBuf::from(s.trim()));
+    let log_level = parsed
+        .log_level
+        .as_deref()
+        .and_then(|s| s.trim().parse::<LogLevel>().ok());
+    let log_file = parsed
+        .log_file
+        .as_deref()
+        .and_then(|s| {
+            let trimmed = s.trim();
+            if trimmed.is_empty() { None } else { Some(PathBuf::from(trimmed)) }
+        });
     let recent_window = parsed
         .recent_window_seconds
         .map(Duration::from_secs)
@@ -198,22 +222,6 @@ pub fn ensure_default_config_exists() -> Option<PathBuf> {
     }
 }
 
-// Minimal XML loader for tests & simple configs.
-// - Not a full XML parser, but good enough for the simple tag format used in tests.
-// - Returns a Config with values from the XML, falling back to Config::default() for missing tags.
-
-fn extract_tag(contents: &str, tag: &str) -> Option<String> {
-    let open = format!("<{}>", tag);
-    let close = format!("</{}>", tag);
-    let a = contents.find(&open)?;
-    let b = contents.find(&close)?;
-    let start = a + open.len();
-    if start > b {
-        return None;
-    }
-    Some(contents[start..b].trim().to_string())
-}
-
 // Map XmlConfig -> Config (used by both loaders)
 fn xml_to_config(parsed: XmlConfig) -> Config {
     let mut cfg = Config::default();
@@ -221,17 +229,24 @@ fn xml_to_config(parsed: XmlConfig) -> Config {
     // Paths
     cfg.download_base = parsed
         .download_base
-        .map(PathBuf::from)
+        .as_deref()
+        .map(|s| PathBuf::from(s.trim()))
         .unwrap_or_else(|| PathBuf::from(DOWNLOAD_BASE_DEFAULT));
     cfg.completed_base = parsed
         .completed_base
-        .map(PathBuf::from)
+        .as_deref()
+        .map(|s| PathBuf::from(s.trim()))
         .unwrap_or_else(|| PathBuf::from(COMPLETED_BASE_DEFAULT));
-    cfg.log_file = parsed.log_file.map(PathBuf::from);
+    if let Some(s) = parsed.log_file.as_deref() {
+        let trimmed = s.trim();
+        if !trimmed.is_empty() {
+            cfg.log_file = Some(PathBuf::from(trimmed));
+        }
+    }
 
     // Log level
     if let Some(s) = parsed.log_level.as_deref() {
-        if let Some(level) = LogLevel::parse(s) {
+        if let Ok(level) = s.trim().parse::<LogLevel>() {
             cfg.log_level = level;
         }
     }

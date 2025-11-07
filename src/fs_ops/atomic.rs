@@ -4,10 +4,18 @@
 //! - On Unix, best-effort fsync of the destination directory after rename.
 
 use anyhow::{Context, Result};
+use tracing::debug;
+
+/// Outcome of an attempted atomic move.
+/// Currently only distinguishes a successful rename; reserved for future cross-device signaling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MoveOutcome {
+    Renamed,
+}
 use std::fs;
 use std::path::Path;
 
-pub fn try_atomic_move(src: &Path, dst: &Path) -> Result<()> {
+pub fn try_atomic_move(src: &Path, dst: &Path) -> Result<MoveOutcome> {
     // Windows: ensure destination path is free (rename doesn’t overwrite there).
     #[cfg(windows)]
     {
@@ -28,12 +36,24 @@ pub fn try_atomic_move(src: &Path, dst: &Path) -> Result<()> {
     fs::rename(src, dst)
         .with_context(|| format!("atomic rename '{}' -> '{}'", src.display(), dst.display()))?;
 
-    // Unix: fsync the destination directory to persist the rename (best-effort).
+    // Unix: fsync directories to persist the rename (best-effort).
     #[cfg(unix)]
-    if let Some(parent) = dst.parent() {
+    {
         // Ignore fsync errors to avoid turning a successful rename into a failure.
-        let _ = super::util::fsync_dir(parent);
+        if let Some(dst_parent) = dst.parent() {
+            if let Err(e) = super::util::fsync_dir(dst_parent) {
+                debug!(error = %e, dir = %dst_parent.display(), "best-effort fsync(dst_parent) failed");
+            }
+        }
+        // If moving between different directories on the same fs, also fsync the source parent.
+        if let (Some(src_parent), Some(dst_parent)) = (src.parent(), dst.parent()) {
+            if src_parent != dst_parent {
+                if let Err(e) = super::util::fsync_dir(src_parent) {
+                    debug!(error = %e, dir = %src_parent.display(), "best-effort fsync(src_parent) failed");
+                }
+            }
+        }
     }
 
-    Ok(())
+    Ok(MoveOutcome::Renamed)
 }

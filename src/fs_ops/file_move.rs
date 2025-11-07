@@ -19,7 +19,7 @@ use crate::platform::check_disk_space;
 use crate::shutdown;
 use crate::utils::{ensure_not_base, stable_file_probe, unique_destination};
 
-use super::atomic::try_atomic_move;
+use super::atomic::{try_atomic_move, MoveOutcome};
 use super::copy::safe_copy_and_rename_with_metadata;
 use super::lock::{acquire_dir_lock, acquire_move_lock, io_error_with_help};
 use super::metadata;
@@ -83,7 +83,7 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
 
     // Fast path: atomic rename (same filesystem).
     match try_atomic_move(src, &dest) {
-        Ok(()) => {
+        Ok(MoveOutcome::Renamed) => {
             info!(src = %src.display(), dest = %dest.display(), "Renamed file atomically");
             if let Some(meta) = meta_before.as_ref() {
                 metadata::preserve_metadata(&dest, meta).ok();
