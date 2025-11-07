@@ -52,7 +52,7 @@ Designed for ease-of-use and reliability: quick sensible defaults, a tiny XML co
 ## Features
 
 - Atomic rename when possible; safe copy+rename fallback
-- Optional metadata preservation (permissions, mtime)
+ - Optional metadata preservation (single flag): permissions, mtime, and xattrs (when feature enabled)
 - Disk space check (Unix)
 - Refuses log paths under symlinked ancestors
 - Structured logging (human or JSON)
@@ -479,6 +479,38 @@ name = "aria_move"
 Use `icacls` to inspect ACLs; disk space check is Unix-only.
 
 ---
+
+## Resolution behavior (auto-selecting a source)
+
+When no explicit `SOURCE_PATH` is provided, aria_move can resolve a candidate from `download_base`:
+
+- Depth limit: Scans to a bounded depth to avoid expensive walks.
+- Recency window: Prefers files modified within a recent time window.
+- Deterministic tie-break: If multiple candidates share the same mtime, the lexicographically smallest path wins.
+- Pattern filters: Skips known temporary suffixes like `.part` or `.tmp`, and zero-length files.
+- Fallback mode: If none are recent, falls back to the newest overall (configurable).
+- Errors and interruptions: Reports invalid bases, permission-denied entries, and cooperates with shutdown requests.
+
+## Metadata preservation (one flag)
+
+The `preserve_metadata` flag controls all metadata preservation in a single switch:
+
+- Permissions and read-only bits
+- Modified time (mtime)
+- Extended attributes (xattrs) when compiled with the optional `xattr` feature
+
+Preservation is best-effort and integrated into both atomic rename and copy+rename flows.
+
+## Disk space pre-flight check
+
+Before copying large trees across filesystems, aria_move performs a best-effort free space check on the destination filesystem:
+
+- Cushion: Uses a small fixed cushion (4 MiB) to account for metadata/journal/temp files.
+- Conservative estimate: On Unix, relies on user-available blocks for safety.
+- Racy by nature: The check is a pre-flight; actual free space may change between check and copy.
+- Typed error: On insufficient space, returns `InsufficientSpace` with required/available bytes and destination path.
+
+Tip: For deterministic tests, internal helpers validate the cushion logic independent of real disk space.
 
 ## Prebuilt Binaries
 

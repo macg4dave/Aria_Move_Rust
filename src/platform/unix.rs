@@ -11,11 +11,20 @@ pub fn open_log_file_secure_append(path: &Path) -> io::Result<File> {
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    OpenOptions::new()
+    let f = OpenOptions::new()
         .create(true)
         .append(true)
         .mode(0o600)
-        .open(path)
+        .open(path)?;
+    // Enforce 0600 even if file pre-existed with different mode.
+    let meta = f.metadata();
+    if let Ok(m) = meta {
+        let current = m.permissions().mode() & 0o777;
+        if current != 0o600 {
+            let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+        }
+    }
+    Ok(f)
 }
 
 /// Write config atomically: temp file (0600) + fsync + rename + fsync dir.
@@ -25,14 +34,8 @@ pub fn write_config_secure_new_0600(path: &Path, contents: &[u8]) -> Result<()> 
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "config path has no parent"))?;
     fs::create_dir_all(parent).with_context(|| format!("create parent '{}'", parent.display()))?;
 
-    let tmp = parent.join(format!(
-        ".aria_move.config.tmp.{}.{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
+    // Hidden sibling temp path (unique) next to target.
+    let tmp = tmp_sibling_name(path);
 
     let mut f = OpenOptions::new()
         .write(true)
@@ -44,9 +47,11 @@ pub fn write_config_secure_new_0600(path: &Path, contents: &[u8]) -> Result<()> 
     f.sync_all().context("fsync temp config")?;
     drop(f);
 
-    fs::rename(&tmp, path).with_context(|| {
-        format!("rename '{}' -> '{}'", tmp.display(), path.display())
-    })?;
+    if let Err(e) = fs::rename(&tmp, path) {
+        // Best-effort cleanup of temp file on failure.
+        let _ = fs::remove_file(&tmp);
+        return Err(e).with_context(|| format!("rename '{}' -> '{}'", tmp.display(), path.display()));
+    }
 
     let dir_file = File::open(parent).with_context(|| format!("open dir '{}'", parent.display()))?;
     dir_file.sync_all().context("fsync parent dir")?;
@@ -67,66 +72,88 @@ pub fn set_file_mode_0600(path: &Path) -> io::Result<()> {
 
 /// Create a hidden sibling temp name for atomic writes.
 fn tmp_sibling_name(target: &Path) -> PathBuf {
+    use std::time::{SystemTime, UNIX_EPOCH};
     let pid = std::process::id();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let name = format!(".aria_move.config.tmp.{pid}.{nanos}");
-    target
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(name)
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    // Add a simple counter to reduce collision risk in ultra-fast successive calls.
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let name = format!(".aria_move.config.tmp.{pid}.{nanos}.{seq}");
+    target.parent().unwrap_or_else(|| Path::new(".")).join(name)
 }
 
 /// Check available disk space at the given path (returns bytes available).
 /// Uses statvfs on Unix. Returns Ok(available_bytes) or an IO error.
 pub fn check_disk_space(path: &Path) -> io::Result<u64> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         use std::ffi::CString;
         use std::mem::MaybeUninit;
-
-        let c_path = CString::new(path.as_os_str().to_str().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "path not valid UTF-8")
-        })?)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains null byte"))?;
-
+        use std::os::unix::ffi::OsStrExt;
+        let c_path = CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains null byte"))?;
         unsafe {
             let mut stat: MaybeUninit<libc::statvfs> = MaybeUninit::uninit();
             if libc::statvfs(c_path.as_ptr(), stat.as_mut_ptr()) != 0 {
                 return Err(io::Error::last_os_error());
             }
             let stat = stat.assume_init();
-            // Cast both f_bavail and f_bsize to u64 before multiplying
             Ok((stat.f_bavail as u64).saturating_mul(stat.f_bsize as u64))
         }
     }
-
-    #[cfg(target_os = "linux")]
-    {
-        use std::ffi::CString;
-        use std::mem::MaybeUninit;
-
-        let c_path = CString::new(path.as_os_str().to_str().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "path not valid UTF-8")
-        })?)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains null byte"))?;
-
-        unsafe {
-            let mut stat: MaybeUninit<libc::statvfs> = MaybeUninit::uninit();
-            if libc::statvfs(c_path.as_ptr(), stat.as_mut_ptr()) != 0 {
-                return Err(io::Error::last_os_error());
-            }
-            let stat = stat.assume_init();
-            // f_bavail and f_bsize are both c_ulong; cast to u64 for consistent return type.
-            Ok((stat.f_bavail as u64).saturating_mul(stat.f_bsize as u64))
-        }
-    }
-
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
-        // Fallback for other Unix: return a large number (no check)
         Ok(u64::MAX)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use tempfile::tempdir;
+
+    #[test]
+    fn enforce_log_file_mode() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("log.txt");
+        // Pre-create with loose perms.
+        fs::write(&path, b"hello").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let _f = open_log_file_secure_append(&path).unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[test]
+    fn atomic_config_write_sets_mode_and_no_temp_leftover() {
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join("config.xml");
+        write_config_secure_new_0600(&cfg, b"<x/>").unwrap();
+        let contents = fs::read(&cfg).unwrap();
+        assert_eq!(contents, b"<x/>");
+        let mode = fs::metadata(&cfg).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        // Ensure no leftover temp files.
+        for entry in fs::read_dir(dir.path()).unwrap() {
+            let p = entry.unwrap().path();
+            let name = p.file_name().unwrap().to_string_lossy();
+            assert!(!name.starts_with(".aria_move.config.tmp."), "leftover temp file: {}", name);
+        }
+    }
+
+    #[test]
+    fn tmp_name_uniqueness() {
+        let target = Path::new("dummy.xml");
+        let a = tmp_sibling_name(target);
+        let b = tmp_sibling_name(target);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn disk_space_smoke() {
+        let dir = tempdir().unwrap();
+        let bytes = check_disk_space(dir.path()).unwrap();
+        assert!(bytes > 0);
     }
 }
