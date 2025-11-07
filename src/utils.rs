@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use tracing::debug;
+use crate::shutdown;
 
 /// Return a unique destination by appending timestamp+pid when candidate exists.
 /// - Preserves non-UTF8 names (uses OsString).
@@ -82,6 +83,7 @@ pub(crate) fn ensure_not_base(download_base: &Path, candidate: &Path) -> anyhow:
 
 /// Quick writable probe: create and remove a small file in `dir`.
 /// Uses create_new to avoid clobbering existing files.
+#[cfg(any(test, feature = "test-helpers"))]
 pub(crate) fn is_writable_probe(dir: &Path) -> std::io::Result<()> {
     let probe = dir.join(format!(".aria_move_probe_{}.tmp", std::process::id()));
     match fs::OpenOptions::new()
@@ -134,7 +136,13 @@ pub(crate) fn stable_file_probe(
         .map(|m| m.len())
         .map_err(anyhow::Error::from)?;
     for _ in 0..attempts {
+        if shutdown::is_requested() {
+            return Err(anyhow::anyhow!("interrupted"));
+        }
         std::thread::sleep(interval);
+        if shutdown::is_requested() {
+            return Err(anyhow::anyhow!("interrupted"));
+        }
         let size = fs::metadata(path)
             .map(|m| m.len())
             .map_err(anyhow::Error::from)?;
@@ -148,4 +156,87 @@ pub(crate) fn stable_file_probe(
         "File {} did not stabilize in size",
         path.display()
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+    use std::io::Write;
+    use std::thread;
+
+    #[test]
+    fn unique_destination_same_when_absent() {
+        let td = tempdir().unwrap();
+        let p = td.path().join("file.txt");
+        assert!(!p.exists());
+        let u = unique_destination(&p);
+        assert_eq!(u, p);
+    }
+
+    #[test]
+    fn unique_destination_changes_when_exists() {
+        let td = tempdir().unwrap();
+        let p = td.path().join("data.bin");
+        fs::write(&p, b"x").unwrap();
+        let u = unique_destination(&p);
+        assert_ne!(u, p);
+        // Extension preserved
+        assert_eq!(u.extension().and_then(|s| s.to_str()), Some("bin"));
+        assert!(!u.exists());
+    }
+
+    #[test]
+    fn ensure_not_base_matches_fails() {
+        let td = tempdir().unwrap();
+        let base = td.path().join("base");
+        fs::create_dir_all(&base).unwrap();
+        let err = ensure_not_base(&base, &base).unwrap_err();
+        assert!(format!("{}", err).contains("Refusing to move the download base"));
+    }
+
+    #[test]
+    fn stable_file_probe_ok_when_quiescent() {
+        shutdown::reset();
+        let td = tempdir().unwrap();
+        let f = td.path().join("q.txt");
+        fs::write(&f, b"abc").unwrap();
+        // Use longer interval so background scheduling doesn't race with reset
+        stable_file_probe(&f, Duration::from_millis(30), 2).unwrap();
+    }
+
+    #[test]
+    fn file_is_mutable_when_growing() {
+        shutdown::reset();
+        let td = tempdir().unwrap();
+        let f = td.path().join("grow.log");
+        fs::write(&f, b"seed").unwrap();
+        // Append in background shortly after
+        let f2 = f.clone();
+        thread::spawn(move || {
+            for _ in 0..3 {
+                thread::sleep(Duration::from_millis(120));
+                let mut file = fs::OpenOptions::new().append(true).open(&f2).unwrap();
+                let _ = writeln!(file, "more");
+            }
+        });
+        let mut_flag = file_is_mutable(&f).unwrap();
+        assert!(mut_flag, "should detect mutability while writing");
+    }
+
+    #[test]
+    fn shutdown_interrupts_probe() {
+        shutdown::reset();
+        let td = tempdir().unwrap();
+        let f = td.path().join("s.txt");
+        fs::write(&f, b"abc").unwrap();
+        thread::spawn(|| {
+            thread::sleep(Duration::from_millis(5));
+            shutdown::request_with_reason(1);
+        });
+        let err = stable_file_probe(&f, Duration::from_millis(20), 5).unwrap_err();
+        let msg = format!("{}", err);
+        assert!(msg.contains("interrupted"));
+        shutdown::reset();
+    }
 }
