@@ -1,7 +1,7 @@
 use std::fs;
 use std::process::Command;
 use tempfile::tempdir;
-use assert_cmd::cargo::cargo_bin;
+use assert_cmd::cargo::cargo_bin; // keep import for macro re-export
 
 #[test]
 fn binary_uses_config_pointed_by_env() {
@@ -40,7 +40,7 @@ fn binary_uses_config_pointed_by_env() {
     eprintln!("Source file: {}", src.display());
 
     // Run with ARIA_MOVE_CONFIG and --dry-run
-    let me = cargo_bin("aria_move");
+    let me = cargo_bin!("aria_move");
     let out = Command::new(&me)
         .env("ARIA_MOVE_CONFIG", &cfg_path)
         .arg("--dry-run")

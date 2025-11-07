@@ -39,6 +39,7 @@ pub fn load_or_init() -> Result<LoadResult> {
 /// - Ensure directories exist (create if missing) with safe perms
 /// - Reject symlink ancestors (Unix)
 /// - Canonicalize final paths back into cfg
+/// - Ensure download_base and completed_base are disjoint (neither equal nor nested)
 pub fn validate_and_normalize(cfg: &mut types::Config) -> Result<()> {
     ensure_safe_dir(&cfg.download_base)
         .with_context(|| format!("download_base invalid: {}", cfg.download_base.display()))?;
@@ -47,6 +48,28 @@ pub fn validate_and_normalize(cfg: &mut types::Config) -> Result<()> {
     ensure_safe_dir(&cfg.completed_base)
         .with_context(|| format!("completed_base invalid: {}", cfg.completed_base.display()))?;
     cfg.completed_base = canonicalize_best_effort(&cfg.completed_base)?;
+
+    // Disjointness checks after canonicalization
+    if cfg.download_base == cfg.completed_base {
+        return Err(anyhow!(
+            "download_base and completed_base resolve to the same path: '{}'",
+            cfg.download_base.display()
+        ));
+    }
+    if cfg.download_base.starts_with(&cfg.completed_base) {
+        return Err(anyhow!(
+            "download_base '{}' must not be inside completed_base '{}'",
+            cfg.download_base.display(),
+            cfg.completed_base.display()
+        ));
+    }
+    if cfg.completed_base.starts_with(&cfg.download_base) {
+        return Err(anyhow!(
+            "completed_base '{}' must not be inside download_base '{}'",
+            cfg.completed_base.display(),
+            cfg.download_base.display()
+        ));
+    }
     Ok(())
 }
 

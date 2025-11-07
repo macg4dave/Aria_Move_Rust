@@ -13,51 +13,25 @@ use super::types::Config;
 
 impl Config {
     /// Validate existence, readability/writability and canonical paths.
+    #[deprecated(since = "0.2.0", note = "Use config::validate_and_normalize instead; this will be removed in a future release.")]
     pub fn validate(&self) -> Result<()> {
-        let db = &self.download_base;
-        let cb = &self.completed_base;
+        // Deprecated path: delegate to config::validate_and_normalize for unified logic.
+        // Keep extended readability/writability and platform security checks for now.
+        use crate::config::validate_and_normalize; // avoid recursion
+        let mut owned = self.clone();
+        validate_and_normalize(&mut owned)?;
 
-        // 1) Download base: must exist, be a directory, and be readable.
-        ensure_dir_exists_and_is_dir(db, "download_base")?;
-        ensure_readable(db, "download_base")?;
-
-        // 2) Completed base: must be a directory; create if missing; ensure writable.
-        ensure_dir_is_or_create(cb, "completed_base")?;
-        ensure_writable(cb, "completed_base")?;
-
-        // 3) Resolve symlinks and ensure the bases are disjoint (neither contains the other).
-        let db_real = fs::canonicalize(db).unwrap_or_else(|_| db.clone());
-        let cb_real = fs::canonicalize(cb).unwrap_or_else(|_| cb.clone());
-
-        if db_real == cb_real {
-            bail!(
-                "download_base and completed_base resolve to the same path: '{}'",
-                db_real.display()
-            );
-        }
-        if db_real.starts_with(&cb_real) {
-            bail!(
-                "download_base '{}' must not be inside completed_base '{}'",
-                db_real.display(),
-                cb_real.display()
-            );
-        }
-        if cb_real.starts_with(&db_real) {
-            bail!(
-                "completed_base '{}' must not be inside download_base '{}'",
-                cb_real.display(),
-                db_real.display()
-            );
-        }
-
-        // 4) Platform-specific directory security checks (perms, ownership, etc).
-        ensure_secure_directory(db, "download_base")?;
-        ensure_secure_directory(cb, "completed_base")?;
-
+        // Perform readability/writability checks similar to legacy behavior.
+        ensure_dir_exists_and_is_dir(&owned.download_base, "download_base")?;
+        ensure_readable(&owned.download_base, "download_base")?;
+        ensure_dir_is_or_create(&owned.completed_base, "completed_base")?; // safe if already exists
+        ensure_writable(&owned.completed_base, "completed_base")?;
+        ensure_secure_directory(&owned.download_base, "download_base")?;
+        ensure_secure_directory(&owned.completed_base, "completed_base")?;
         info!(
             "Config validated: download='{}' completed='{}' log_file='{}'",
-            db.display(),
-            cb.display(),
+            owned.download_base.display(),
+            owned.completed_base.display(),
             self.log_file
                 .as_ref()
                 .map(|p| p.display().to_string())
