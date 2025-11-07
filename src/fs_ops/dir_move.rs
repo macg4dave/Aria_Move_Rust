@@ -10,7 +10,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use rayon::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::info;
+use tracing::{info, warn};
 use walkdir::WalkDir;
 
 use crate::config::types::Config;
@@ -36,7 +36,11 @@ pub fn move_dir(config: &Config, src_dir: &Path) -> Result<PathBuf> {
     let src_name = src_dir
         .file_name()
         .ok_or_else(|| anyhow!("Source directory missing name: {}", src_dir.display()))?;
-    let target = config.completed_base.join(src_name);
+    let mut target = config.completed_base.join(src_name);
+    if target.exists() {
+        // Mirror file move behavior: choose a unique destination directory name.
+        target = crate::utils::unique_destination(&target);
+    }
 
     if config.dry_run {
         info!(src = %src_dir.display(), dest = %target.display(), "dry-run: would move directory");
@@ -48,8 +52,66 @@ pub fn move_dir(config: &Config, src_dir: &Path) -> Result<PathBuf> {
         .with_context(|| format!("acquire lock for '{}'", config.completed_base.display()))?;
 
     // Fast path: same-filesystem atomic directory rename.
-    if fs::rename(src_dir, &target).is_ok() {
-        info!(src = %src_dir.display(), dest = %target.display(), "Renamed directory atomically");
+    // Optional pre-detect of cross-device (Unix) to skip a failing rename.
+    let mut did_rename = false;
+
+    // In tests, allow forcing the copy fallback to exercise that path.
+    #[cfg(test)]
+    let force_copy = std::env::var("ARIA_MOVE_FORCE_DIR_COPY").ok().as_deref() == Some("1");
+    #[cfg(not(test))]
+    let force_copy = false;
+
+    #[cfg(unix)]
+    let cross_device = if let (Some(src_parent), Some(dst_parent)) = (src_dir.parent(), target.parent()) {
+        use std::os::unix::fs::MetadataExt;
+        if let (Ok(s_meta), Ok(d_meta)) = (fs::metadata(src_parent), fs::metadata(dst_parent)) {
+            s_meta.dev() != d_meta.dev()
+        } else { false }
+    } else { false };
+    #[cfg(not(unix))]
+    let cross_device = false;
+
+    if !force_copy && !cross_device {
+        match fs::rename(src_dir, &target) {
+            Ok(()) => {
+                info!(src = %src_dir.display(), dest = %target.display(), "Renamed directory atomically");
+                // Best-effort fsync of destination parent (and source parent if different) on Unix.
+                #[cfg(unix)]
+                {
+                    if let Some(dst_parent) = target.parent() {
+                        if let Err(e) = super::util::fsync_dir(dst_parent) {
+                            warn!(error = %e, dir = %dst_parent.display(), "best-effort fsync(dst_parent) failed");
+                        }
+                    }
+                    if let (Some(sp), Some(dp)) = (src_dir.parent(), target.parent()) {
+                        if sp != dp {
+                            if let Err(e) = super::util::fsync_dir(sp) {
+                                warn!(error = %e, dir = %sp.display(), "best-effort fsync(src_parent) failed");
+                            }
+                        }
+                    }
+                }
+                did_rename = true;
+            }
+            Err(e) => {
+                // Proceed to copy fallback; log a short hint.
+                let hint: &str = if let Some(code) = e.raw_os_error() {
+                    #[cfg(unix)]
+                    {
+                        if code == libc::EXDEV { "cross-filesystem; will copy instead" }
+                        else if code == libc::EACCES || code == libc::EPERM { "permission denied; check destination perms" }
+                        else { "falling back to copy" }
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        if e.kind() == std::io::ErrorKind::PermissionDenied { "permission denied; check destination perms" } else { "falling back to copy" }
+                    }
+                } else { "falling back to copy" };
+                warn!(error = %e, hint, "Atomic directory rename failed, using copy fallback");
+            }
+        }
+    }
+    if did_rename {
         return Ok(target);
     }
 
@@ -90,7 +152,7 @@ pub fn move_dir(config: &Config, src_dir: &Path) -> Result<PathBuf> {
         .map(|e| e.into_path())
         .collect();
 
-    files.par_iter().try_for_each(|path| -> Result<()> {
+    let copy_result: Result<()> = files.par_iter().try_for_each(|path| -> Result<()> {
         // Skip files that appear to be in use to avoid partial copies.
         if file_is_mutable(path)? {
             return Err(anyhow!(
@@ -106,12 +168,28 @@ pub fn move_dir(config: &Config, src_dir: &Path) -> Result<PathBuf> {
             fs::create_dir_all(parent).map_err(io_error_with_help("create directory", parent))?;
         }
 
+        // Copy file data
         fs::copy(path, &dst).map_err(io_error_with_help("copy file to destination", &dst))?;
+        // Best-effort metadata preservation
+        if let Ok(src_meta) = fs::metadata(path) {
+            let _ = super::metadata::preserve_metadata(&dst, &src_meta);
+        }
         Ok(())
-    })?;
+    });
+    if let Err(e) = copy_result {
+        // Partial failure cleanup: remove target subtree to avoid half-copied results.
+        let _ = fs::remove_dir_all(&target);
+        return Err(e);
+    }
 
     // 3) Remove the original tree after successful copy.
     fs::remove_dir_all(src_dir).map_err(io_error_with_help("remove source directory", src_dir))?;
+
+    // Best-effort fsync of the destination directory to persist entries.
+    #[cfg(unix)]
+    if let Err(e) = super::util::fsync_dir(&target) {
+        warn!(error = %e, dir = %target.display(), "best-effort fsync(target) failed");
+    }
 
     info!(
         src = %src_dir.display(),

@@ -81,7 +81,7 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
         None
     };
 
-    // Fast path: atomic rename (same filesystem).
+    // Fast path: atomic rename (same filesystem). May return CrossDevice prediction.
     match try_atomic_move(src, &dest) {
         Ok(MoveOutcome::Renamed) => {
             info!(src = %src.display(), dest = %dest.display(), "Renamed file atomically");
@@ -90,26 +90,21 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
             }
             return Ok(dest);
         }
+        Ok(MoveOutcome::CrossDevice) => {
+            info!(src = %src.display(), dest = %dest.display(), "Cross-device move detected; using copy fallback");
+        }
         Err(e) => {
             // Compute a short hint for logs; still proceed to copy fallback.
-            #[cfg(unix)]
-            let hint: &str = match e
-                .downcast_ref::<io::Error>()
-                .and_then(|ioe| ioe.raw_os_error())
-            {
-                Some(code) if code == libc::EXDEV => "cross-filesystem; will copy instead",
-                Some(code) if code == libc::EACCES || code == libc::EPERM => {
+            let hint: &str = if let Some(ioe) = e.downcast_ref::<io::Error>() {
+                if super::util::is_cross_device(ioe) {
+                    "cross-filesystem; will copy instead"
+                } else if ioe.kind() == io::ErrorKind::PermissionDenied {
                     "permission denied; check destination perms"
+                } else {
+                    "falling back to copy"
                 }
-                _ => "falling back to copy",
-            };
-
-            #[cfg(not(unix))]
-            let hint: &str = match e.downcast_ref::<io::Error>().map(|ioe| ioe.kind()) {
-                Some(io::ErrorKind::PermissionDenied) => {
-                    "permission denied; check destination perms"
-                }
-                _ => "falling back to copy",
+            } else {
+                "falling back to copy"
             };
 
             warn!(error = %e, hint, "Atomic rename failed, using safe copy+rename");

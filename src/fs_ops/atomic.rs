@@ -7,15 +7,31 @@ use anyhow::{Context, Result};
 use tracing::debug;
 
 /// Outcome of an attempted atomic move.
-/// Currently only distinguishes a successful rename; reserved for future cross-device signaling.
+/// - Renamed: atomic rename completed on the same filesystem.
+/// - CrossDevice: pre-detected cross-filesystem move; caller should copy instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MoveOutcome {
     Renamed,
+    CrossDevice,
 }
 use std::fs;
 use std::path::Path;
 
 pub fn try_atomic_move(src: &Path, dst: &Path) -> Result<MoveOutcome> {
+    // Unix: pre-detect cross-device moves to avoid a failing rename with EXDEV.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let (Some(src_parent), Some(dst_parent)) = (src.parent(), dst.parent()) {
+            // Best-effort metadata checks; if either stat fails, proceed and let rename surface errors.
+            if let (Ok(s_meta), Ok(d_meta)) = (fs::metadata(src_parent), fs::metadata(dst_parent)) {
+                if s_meta.dev() != d_meta.dev() {
+                    return Ok(MoveOutcome::CrossDevice);
+                }
+            }
+        }
+    }
+
     // Windows: ensure destination path is free (rename doesn’t overwrite there).
     #[cfg(windows)]
     {

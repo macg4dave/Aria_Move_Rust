@@ -29,8 +29,22 @@ pub fn safe_copy_and_rename(src: &Path, dest: &Path) -> Result<()> {
     let tmp_path = util::unique_temp_path(dest_dir);
 
     // Stream the copy (fsyncs temp file internally).
-    io_copy::copy_streaming(src, &tmp_path)
+    let written = io_copy::copy_streaming(src, &tmp_path)
         .map_err(io_error_with_help("copy to temporary file", &tmp_path))?;
+
+    // Sanity-check: verify byte count matches source size to catch short writes.
+    let src_size = fs::metadata(src)
+        .with_context(|| format!("stat {}", src.display()))?
+        .len();
+    if written != src_size {
+        // Best-effort cleanup
+        let _ = fs::remove_file(&tmp_path);
+        return Err(anyhow!(
+            "short write while copying: wrote {} bytes but source is {} bytes",
+            written,
+            src_size
+        ));
+    }
 
     // Atomic rename into final destination (handles Windows overwrite + Unix dir fsync).
     if let Err(e) = try_atomic_move(&tmp_path, dest) {
