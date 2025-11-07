@@ -123,8 +123,8 @@ pub fn run(args: Args) -> Result<()> {
     // Main run (so we can drop guard after)
     let result = (|| -> Result<()> {
         validate_paths(&cfg)?;
-        let maybe_src = args.source_path.as_deref();
-        let src = match resolve_source_path(&cfg, maybe_src) {
+        let maybe_src_owned = args.resolved_source();
+        let src = match resolve_source_path(&cfg, maybe_src_owned.as_deref()) {
             Ok(p) => p,
             Err(e) => {
                 error!("Failed to resolve a source path: {:?}", e);

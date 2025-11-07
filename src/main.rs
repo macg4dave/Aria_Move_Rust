@@ -45,7 +45,7 @@ fn main() -> Result<()> {
     config::validate_and_normalize(&mut cfg)?;
 
     let src = match args.resolved_source() {
-        Some(p) => p.to_path_buf(),
+        Some(p) => p,
         None => {
             out::print_error("No source provided. Use SOURCE_PATH or --source-path <PATH>.");
             std::process::exit(2);

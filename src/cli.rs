@@ -6,7 +6,7 @@
 //! - --debug is a shorthand for --log-level debug.
 
 use clap::{Parser, ValueHint};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::config::types::{Config, LogLevel};
 
@@ -89,10 +89,40 @@ pub struct Args {
 impl Args {
     /// Effective source path: `--source-path` if provided, else positional SOURCE_PATH.
     #[inline]
-    pub fn resolved_source(&self) -> Option<&Path> {
-        self.source_path
-            .as_deref()
-            .or(self.source_path_pos.as_deref())
+    /// Effective source path.
+    ///
+    /// Precedence:
+    /// 1) `--source-path` if provided
+    /// 2) positional `SOURCE_PATH` if provided
+    /// 3) single positional first-argument (task_id) when the user invoked
+    ///    `aria_move <filename>` (back-compat / convenience)
+    pub fn resolved_source(&self) -> Option<std::path::PathBuf> {
+        if let Some(p) = &self.source_path {
+            return Some(p.clone());
+        }
+        if let Some(p) = &self.source_path_pos {
+            return Some(p.clone());
+        }
+
+        // Stricter fallback: only treat `task_id` as a path when the user did
+        // not provide `num_files` (i.e. they didn't invoke the aria2-style
+        // three-argument form) and the `task_id` string looks like a path.
+        // "Looks like a path" is a lightweight heuristic: contains a path
+        // separator or a dot (e.g. "file.iso") or a drive-colon on Windows
+        // (e.g. "C:\\file"). This avoids misinterpreting aria2 task IDs
+        // (hash-like strings) as file paths.
+        if self.num_files.is_none() {
+            if let Some(t) = &self.task_id {
+                fn looks_like_path(s: &str) -> bool {
+                    s.contains('/') || s.contains('\\') || s.contains('.') || s.contains(':') || s.starts_with('.')
+                }
+                if looks_like_path(t) {
+                    return Some(std::path::PathBuf::from(t));
+                }
+            }
+        }
+
+        None
     }
 
     /// Effective log level derived from flags.
