@@ -106,7 +106,7 @@ pub fn run(args: Args) -> Result<()> {
         let guard_slot = Arc::clone(&guard_slot);
         ctrlc::set_handler(move || {
             shutdown::request();
-                out::print_warn("Received interrupt; shutting down gracefully...");
+            out::print_warn("Received interrupt; shutting down gracefully...");
             if let Ok(mut g) = guard_slot.lock() {
                 let _ = g.take(); // drop guard here to flush tracing_appender
             }
@@ -128,7 +128,27 @@ pub fn run(args: Args) -> Result<()> {
         let src = match resolve_source_path(&cfg, maybe_src_owned.as_deref()) {
             Ok(p) => p,
             Err(e) => {
-                error!("Failed to resolve a source path: {:?}", e);
+                if let Some(am) = e.downcast_ref::<AriaMoveError>() {
+                    match am {
+                        AriaMoveError::ProvidedNotFile(path) => {
+                            error!(kind = "provided_not_file", path = %path.display(), "Source path is not a regular file")
+                        }
+                        AriaMoveError::Disappeared(path) => {
+                            error!(kind = "disappeared", path = %path.display(), "Resolved path disappeared before use")
+                        }
+                        AriaMoveError::NoneFound(base) => {
+                            error!(kind = "none_found", base = %base.display(), "No candidate file found under base")
+                        }
+                        AriaMoveError::BaseInvalid(base) => {
+                            error!(kind = "base_invalid", base = %base.display(), "Download base invalid or not a directory")
+                        }
+                        other => {
+                            error!(kind = "resolve_error", error = ?other, "Failed to resolve a source path")
+                        }
+                    }
+                } else {
+                    error!(error = ?e, "Failed to resolve a source path");
+                }
                 return Err(e);
             }
         };
@@ -155,6 +175,18 @@ pub fn run(args: Args) -> Result<()> {
                         }
                         AriaMoveError::Interrupted => {
                             error!(kind = "interrupted", "Move aborted by user")
+                        }
+                        AriaMoveError::ProvidedNotFile(path) => {
+                            error!(kind = "provided_not_file", path = %path.display(), "Move failed")
+                        }
+                        AriaMoveError::Disappeared(path) => {
+                            error!(kind = "disappeared", path = %path.display(), "Move failed")
+                        }
+                        AriaMoveError::NoneFound(base) => {
+                            error!(kind = "none_found", base = %base.display(), "Move failed")
+                        }
+                        AriaMoveError::BaseInvalid(base) => {
+                            error!(kind = "base_invalid", base = %base.display(), "Move failed")
                         }
                     }
                 } else {
