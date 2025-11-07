@@ -4,7 +4,9 @@
 //! - Callers decide whether to treat failures as fatal; this helper itself does not.
 
 use anyhow::Result;
-use filetime::{set_file_atime, set_file_mtime, set_file_times, FileTime};
+use filetime::{set_file_times, FileTime};
+#[cfg(not(unix))]
+use filetime::{set_file_atime, set_file_mtime};
 use std::fs;
 use std::path::Path;
 

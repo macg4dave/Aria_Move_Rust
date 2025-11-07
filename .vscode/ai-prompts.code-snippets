@@ -1,0 +1,41 @@
+{
+  "AI: Fix failing tests": {
+    "prefix": "aiFixTests",
+    "body": [
+      "Why/What/Outcome: Fix failing tests in the repository; keep changes minimal.",
+      "",
+      "Context: Rust repo (Aria_Move_Rust). Tests run with `cargo test`.",
+      "",
+      "Guardrails:",
+      "- Run the test suite locally and include full test output (`cargo test` or targeted test command).",
+      "- Make the smallest possible change needed to solve the request.",
+      "- Add or update tests for any behavioral change.",
+      "- Preserve public APIs and CLI machine-facing outputs unless explicitly allowed.",
+      "- Avoid removing features or tests. If you must remove or change behavior, add a migration note and tests demonstrating the new behavior.",
+      "- Do not exfiltrate secrets or call arbitrary external network services.",
+      "",
+      "Failing output: <PASTE failing tests here>",
+      "",
+      "Deliverables:",
+      "- apply_patch diff that fixes the tests",
+      "- run `cargo test --tests` and include output",
+      "- short explanation of the fix and tests added/modified"
+    ],
+    "description": "Prompt template to ask AI to fix failing tests (copy, fill failing output, paste to assistant)"
+  },
+  "AI: Add integration test": {
+    "prefix": "aiAddTest",
+    "body": [
+      "Why/What/Outcome: Add an integration test that verifies <describe behavior>.",
+      "",
+      "Context: Use `tempfile`/`assert_fs` for isolation; do not touch user files.",
+      "",
+      "Guardrails: (see .github/AI_PROMPTS.md)",
+      "",
+      "Deliverables:",
+      "- New test file under `tests/` using appropriate `#[cfg(...)]` if platform-specific",
+      "- Run `cargo test --test <file> -- --nocapture` and include output"
+    ],
+    "description": "Snippet to create an integration test prompt"
+  }
+}

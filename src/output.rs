@@ -1,5 +1,4 @@
 use owo_colors::OwoColorize;
-use std::io::{self, Write};
 
 /// Small wrapper around stdout/stderr printing to provide consistent, colored
 /// user-facing messages. Colors are enabled only when output is a TTY.

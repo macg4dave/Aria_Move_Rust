@@ -11,7 +11,8 @@
 //! - We refuse file logging if any ancestor of the file path is a symlink.
 
 use anyhow::Result;
-use aria_move::{path_has_symlink_ancestor, LogLevel};
+use aria_move::{path_has_symlink_ancestor, LogLevel, default_log_path};
+use aria_move::output as out;
 use chrono::Local;
 use std::fmt as stdfmt;
 use std::path::Path;
@@ -151,6 +152,16 @@ pub fn init_tracing(
                 .with(file_layer)
                 .init();
             return Ok(Some(guard));
+        }
+        // maybe_open_non_blocking_writer already printed a short reason to stderr.
+        // Provide a clearer, actionable message to users running the binary so
+        // they can diagnose why file logging was not enabled.
+        out::print_warn(&format!(
+            "Requested file logging to '{}' was not enabled. Check that the parent directory exists, is writable by this process, and that no ancestor is a symlink. Logs will continue to stdout.",
+            path.display()
+        ));
+        if let Ok(def) = default_log_path() {
+            out::print_info(&format!("You can try using the default log path instead: {}", def.display()));
         }
     }
 

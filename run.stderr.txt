@@ -1,0 +1,4 @@
+[INFO] Using config from default XML: /Users/dave/Library/Application Support/aria_move/config.xml
+info: Using config from default XML path
+info: Final config - download_base: /Users/dave/incoming  completed_base: /Users/dave/completed
+error: No source provided. Use SOURCE_PATH or --source-path <PATH>.

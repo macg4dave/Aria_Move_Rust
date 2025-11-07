@@ -41,11 +41,20 @@ pub fn default_config_path() -> Result<PathBuf> {
 /// Uses the platform data dir (user-writable app data location).
 /// If that is unavailable, falls back to $HOME/.local/share/aria_move/aria_move.log.
 pub fn default_log_path() -> Result<PathBuf> {
+    // Prefer the same directory as the config file so config and logs live together.
+    // This respects ARIA_MOVE_CONFIG if set.
+    if let Ok(cfg_path) = default_config_path() {
+        if let Some(parent) = cfg_path.parent() {
+            return Ok(parent.join("aria_move.log"));
+        }
+    }
+
+    // Fallback to data_dir (legacy behavior)
     if let Some(base) = data_dir() {
         return Ok(app_path(base, "aria_move.log"));
     }
 
-    // Fallback to $HOME/.local/share/aria_move/aria_move.log
+    // Final fallback to $HOME/.local/share/aria_move/aria_move.log
     let home = std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME not set"))?;
     Ok(PathBuf::from(home)
         .join(".local")

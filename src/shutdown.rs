@@ -24,7 +24,7 @@ pub fn is_requested() -> bool {
 }
 
 /// Test/utility-only: clear the shutdown flag.
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-helpers"))]
 #[inline]
 pub fn reset() {
     SHUTDOWN.store(false, Ordering::Relaxed);
