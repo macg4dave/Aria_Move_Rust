@@ -113,12 +113,14 @@ pub fn init_tracing(
             .event_format(tsfmt::format().json())
             .with_timer(LocalHumanTime)
             .with_level(true)
-            .with_target(false)
+            .with_target(true)
+            .with_thread_ids(true)
     } else {
         tsfmt::layer()
             .with_timer(LocalHumanTime)
             .with_level(true)
-            .with_target(false)
+            .with_target(true)
+            .with_thread_ids(true)
             .compact()
     };
 
@@ -130,13 +132,15 @@ pub fn init_tracing(
                     .event_format(tsfmt::format().json())
                     .with_timer(LocalHumanTime)
                     .with_level(true)
-                    .with_target(false)
+                    .with_target(true)
+                    .with_thread_ids(true)
                     .with_writer(writer)
             } else {
                 tsfmt::layer()
                     .with_timer(LocalHumanTime)
                     .with_level(true)
-                    .with_target(false)
+                    .with_target(true)
+                    .with_thread_ids(true)
                     .compact()
                     .with_writer(writer)
             };

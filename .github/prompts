@@ -1,0 +1,7 @@
+Preserve public CLI flags and their semantics.
+Do not remove functions/modules without test updates passing.
+Keep cross-platform behavior (macOS/Linux, Windows code is present).
+No unsafe or only with justification and added tests.
+Performance changes must not alter user-visible behavior.
+patch that minimally changes code and explicitly calls out impacted modules.
+list tests it expects to pass and any additional tests it proposes

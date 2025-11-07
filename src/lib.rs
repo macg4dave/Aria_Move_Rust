@@ -11,6 +11,7 @@ pub mod fs_ops;
 pub mod platform;
 pub mod shutdown;
 pub mod utils;
+pub mod output;
 
 // Re-exports for tests and binaries
 pub use config::types::{Config, LogLevel};
