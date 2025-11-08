@@ -12,11 +12,14 @@
 
 ### Download
 
-- Go to Releases: https://github.com/macg4dave/Aria_Move_Rust/releases/latest
-- Pick your OS/CPU:
-    - Linux: x86_64 or aarch64
-    - macOS: universal2 (single binary for Apple Silicon + Intel)
-    - Windows: x86_64
+Quick links:
+
+[![Download macOS (universal2)](https://img.shields.io/badge/Download-macOS%20universal2-blue?logo=apple)](https://github.com/macg4dave/Aria_Move_Rust/releases/latest)
+[![Download Linux x86_64](https://img.shields.io/badge/Download-Linux%20x86__64-blue?logo=linux)](https://github.com/macg4dave/Aria_Move_Rust/releases/latest)
+[![Download Linux aarch64](https://img.shields.io/badge/Download-Linux%20aarch64-blue?logo=linux)](https://github.com/macg4dave/Aria_Move_Rust/releases/latest)
+[![Download Windows x86_64](https://img.shields.io/badge/Download-Windows%20x86__64-blue?logo=windows)](https://github.com/macg4dave/Aria_Move_Rust/releases/latest)
+
+All assets live on the latest Release page. Pick the archive matching your OS/CPU.
 
 ### Install
 
@@ -60,7 +63,29 @@ aria_move --print-config
 
 ### Integrate with aria2 (quick)
 
-Point aria2’s on-download-complete hook to a tiny shell/batch wrapper that calls `aria_move` with the values aria2 passes. See the detailed examples below in [Integration with aria2](#integration-with-aria2).
+Point aria2’s on-download-complete hook to a tiny shell/batch wrapper. Minimal examples:
+
+macOS/Linux (bash):
+
+```bash
+#!/usr/bin/env bash
+exec /usr/local/bin/aria_move "$1" "$2" "$3"
+```
+
+Windows (batch):
+
+```bat
+@echo off
+"C:\\Program Files\\aria_move\\aria_move.exe" %1 %2 %3
+```
+
+Add to `aria2.conf`:
+
+```
+on-download-complete=/absolute/path/to/aria_move_hook.sh
+```
+
+See full details and notes in [Integration with aria2](#integration-with-aria2).
 
 ### Troubleshooting
 
