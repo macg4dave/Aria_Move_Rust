@@ -228,6 +228,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn shutdown_interrupts_probe() {
         shutdown::reset();
         let td = tempdir().unwrap();
