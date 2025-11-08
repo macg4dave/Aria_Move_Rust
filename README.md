@@ -7,6 +7,7 @@
 ## Table of Contents
 
 - [Requirements & Build Tools](#requirements--build-tools)
+- [Windows 11 + VS Code Setup](#windows-11--vs-code-setup)
 - [Installation](#installation)
 - [Usage](#usage)
     - [--help snapshot](#help-snapshot)
@@ -117,6 +118,255 @@ pacman -S --needed base-devel mingw-w64-x86_64-toolchain mingw-w64-x86_64-pkg-co
 ```
 
 > Notes: If native deps complain about OpenSSL, install platform dev packages (`libssl-dev`/`openssl-devel`) and export `OPENSSL_DIR`/`PKG_CONFIG_PATH` as above.
+
+---
+
+## Windows 11 + VS Code Setup
+
+This section gives end-to-end steps to build, run, test, and debug `aria_move` on Windows 11 using Visual Studio Code and the MSVC toolchain. Follow it if you're new to Rust or want a reproducible dev setup.
+
+### 1. Overview
+
+You will install: Rust (via rustup), VS Code, C++ Build Tools (MSVC), recommended VS Code extensions, then build and test the project. No extra OpenSSL / pkg-config dependencies are required on Windows for current `Cargo.toml`.
+
+### 2. Prerequisites
+
+- Windows 11 (x64) with latest updates.
+- Administrator rights (for installing build tools).
+- Stable Internet connection.
+
+### 3. Install MSVC Build Tools
+
+If you do NOT already have Visual Studio installed:
+
+1. Download "Build Tools for Visual Studio" from: https://visualstudio.microsoft.com/downloads/
+2. Run the installer, select: "Desktop development with C++" workload.
+3. Finish install (accept defaults). This provides the MSVC linker & libraries Rust needs.
+
+You do NOT need the full Visual Studio IDE unless you want it; the build tools are enough.
+
+### 4. Install Rust (rustup)
+
+Open an elevated PowerShell (Win+X then choose Windows Terminal (Admin)) and run:
+
+```powershell
+irm https://win.rustup.rs -UseBasicParsing | Invoke-Expression
+rustup default stable
+rustup component add rustfmt clippy
+rustc --version
+cargo --version
+```
+
+If prompted for toolchain choice, pick "1) Default installation" (MSVC stable).
+
+### 5. Install Visual Studio Code & Extensions
+
+Download VS Code: https://code.visualstudio.com/
+
+Recommended extensions (search in Extensions sidebar / Ctrl+Shift+X):
+
+- Rust Analyzer (rust-lang.rust-analyzer)
+- CodeLLDB (vadimcn.vscode-lldb) — optional for cross-platform debugging examples (MSVC debugging works via built-in C++ or use WinDbg style; for Rust typical workflows CodeLLDB is fine, though it uses LLDB backend)
+- Even Better TOML (tamasfe.even-better-toml)
+- Error Lens (usernamehw.errorlens) — surface errors inline
+- EditorConfig (EditorConfig.EditorConfig) — if you standardize formatting across editors
+
+### 6. Clone the Repository
+
+In PowerShell:
+
+```powershell
+git clone https://github.com/macg4dave/Aria_Move_Rust.git
+cd Aria_Move_Rust
+code .
+```
+
+VS Code will open the workspace; Rust Analyzer begins indexing.
+
+### 7. Verify Environment
+
+Inside the VS Code integrated terminal (PowerShell):
+
+```powershell
+rustup show
+rustup toolchain list
+cargo check
+```
+
+You should see the stable-x86_64-pc-windows-msvc toolchain and `cargo check` succeed.
+
+### 8. Build & Run
+
+Release build (optimized):
+
+```powershell
+cargo build --release
+.
+dir target\release\aria_move.exe
+```
+
+Run help:
+
+```powershell
+cargo run -- --help
+```
+
+Run with a dummy path (dry-run recommended during testing):
+
+```powershell
+cargo run -- --dry-run 1234 1 C:\temp\example.file
+```
+
+### 9. Tests & Quality Gates
+
+Run unit & integration tests:
+
+```powershell
+cargo test
+```
+
+Lint (Clippy) and format:
+
+```powershell
+cargo clippy --all-targets --all-features -- -D warnings
+cargo fmt --all --check
+```
+
+If formatting check fails, run:
+
+```powershell
+cargo fmt --all
+```
+
+### 10. Optional VS Code Tasks
+
+You can add a `.vscode/tasks.json` for one-click builds. Create the folder/file and add:
+
+```jsonc
+{
+    "version": "2.0.0",
+    "tasks": [
+        { "label": "Cargo Build", "type": "shell", "command": "cargo", "args": ["build"], "group": "build" },
+        { "label": "Cargo Test", "type": "shell", "command": "cargo", "args": ["test"], "group": "test" },
+        { "label": "Cargo Clippy", "type": "shell", "command": "cargo", "args": ["clippy", "--all-targets", "--all-features"], "problemMatcher": [] }
+    ]
+}
+```
+
+Invoke with: Terminal > Run Task... (or Ctrl+Shift+B for the first build task).
+
+### 11. Debugging in VS Code
+
+For simple argument debugging create `.vscode/launch.json`:
+
+```jsonc
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug aria_move (args)",
+            "type": "lldb",            // Use "cppvsdbg" if you prefer MSVC debugger
+            "request": "launch",
+            "program": "${workspaceFolder}/target/debug/aria_move.exe",
+            "args": ["--dry-run", "abcd", "1", "C:/temp/example.bin"],
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "console": "integratedTerminal"
+        }
+    ]
+}
+```
+
+Start by first building a debug binary:
+
+```powershell
+cargo build
+```
+
+Then press F5.
+
+### 12. Feature Flags
+
+Current features (`Cargo.toml`): `test-helpers`, `xattrs`.
+
+- `xattrs` is not supported on Windows (table shows ❌). Avoid enabling it here.
+- Run tests with features if desired (non-Windows ones will skip / fail accordingly):
+
+```powershell
+cargo test --features test-helpers
+```
+
+### 13. Configuration File Location
+
+Default path: `%APPDATA%\aria_move\config.xml`.
+
+Open it quickly:
+
+```powershell
+code $env:APPDATA\aria_move\config.xml
+```
+
+Override config path for a session:
+
+```powershell
+$env:ARIA_MOVE_CONFIG = "C:\custom\config\aria_move.xml"
+cargo run -- --print-config
+```
+
+### 14. Common Issues & Fixes
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `link.exe` not found | MSVC build tools missing | Install Build Tools (section 3) |
+| Slow first build | Rust crate compilation | Subsequent builds are incremental |
+| ExecutionPolicy blocks rustup | Restricted PowerShell policy | Run elevated: `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser` |
+| Antivirus slows build | Real-time scanning of `target/` | Add a safe exclusion for the project dir |
+| Path length errors | Long path disabled | Enable long paths: Group Policy or `reg add HKLM\SYSTEM\CurrentControlSet\Control\FileSystem /v LongPathsEnabled /t REG_DWORD /d 1 /f` |
+| Rust Analyzer stuck | Workspace indexing | Run `cargo check`; ensure no modal prompts hidden |
+
+### 15. Troubleshooting Commands
+
+```powershell
+# Show full build invocation and environment
+cargo build -vv
+
+# Clean out old artifacts
+cargo clean
+
+# Confirm the active toolchain host triple
+rustc -vV
+
+# List outdated dependencies (install cargo-edit first if needed)
+cargo install cargo-outdated
+cargo outdated
+```
+
+### 16. Updating Toolchain
+
+```powershell
+rustup update
+cargo update    # update Cargo.lock versions within constraints
+```
+
+### 17. Automating Checks (Pre-Push)
+
+Optional script `scripts\pre_push.ps1` (create if desired):
+
+```powershell
+cargo fmt --all
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test
+```
+
+Run manually before pushing changes:
+
+```powershell
+pwsh scripts/pre_push.ps1
+```
+
+---
+
+This completes a full Windows 11 + VS Code environment setup. You can now modify code in VS Code, use Rust Analyzer for inline diagnostics, run tasks, and debug with your chosen adapter.
 
 ---
 
