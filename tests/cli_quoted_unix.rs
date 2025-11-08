@@ -73,4 +73,35 @@ mod unix_quoted {
         assert!(dest.exists());
         assert!(!src.exists());
     }
+
+    #[test]
+    fn single_arg_single_quoted_directory_moves_ok() {
+        let td = tempdir().unwrap();
+        let base = fs::canonicalize(td.path()).unwrap();
+        let cfg_path = base.join("config.xml");
+        let download = base.join("incoming");
+        let completed = base.join("completed");
+        fs::create_dir_all(&download).unwrap();
+        fs::create_dir_all(&completed).unwrap();
+        write_cfg(&cfg_path, &download, &completed);
+
+        let dir = download.join("Quoted Dir");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("a.txt"), b"A").unwrap();
+
+        // Simulate user entering a quoted directory name (single arg form)
+        let quoted = format!("'{}'", dir.display());
+        let me = cargo::cargo_bin!("aria_move");
+        let out = Command::new(me)
+            .env("ARIA_MOVE_CONFIG", &cfg_path)
+            .arg(&quoted)
+            .output()
+            .expect("spawn binary");
+
+        assert!(out.status.success(), "expected quoted single arg directory move success; stderr: {}", String::from_utf8_lossy(&out.stderr));
+        let dest = completed.join("Quoted Dir");
+        assert!(dest.exists(), "dest directory should exist");
+        assert!(dest.join("a.txt").exists(), "inner file should move");
+        assert!(!dir.exists(), "source directory should be removed");
+    }
 }

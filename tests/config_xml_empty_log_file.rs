@@ -1,4 +1,4 @@
-use std::fs; use tempfile::tempdir; use aria_move::{load_config_from_xml_path, Config};
+use std::fs; use tempfile::tempdir; use aria_move::load_config_from_xml_path;
 
 #[test]
 fn empty_log_file_leaves_default_intact() {
@@ -10,10 +10,10 @@ fn empty_log_file_leaves_default_intact() {
   <log_file></log_file>
 </config>"#;
     fs::write(&cfg_path, xml).unwrap();
-    let cfg = load_config_from_xml_path(&cfg_path).unwrap();
-    let def = Config::default();
-    assert_eq!(cfg.log_file.is_some(), def.log_file.is_some(), "default log_file presence should remain unchanged");
-    assert_eq!(cfg.log_file.as_ref().map(|p| p.display().to_string()), def.log_file.as_ref().map(|p| p.display().to_string()));
+  let cfg = load_config_from_xml_path(&cfg_path).unwrap();
+  // With empty <log_file></log_file> we fall back to global default (default_log_path())
+  let expected = aria_move::default_log_path().unwrap();
+  assert_eq!(cfg.log_file.as_ref().map(|p| p.display().to_string()), Some(expected.display().to_string()));
 }
 
 #[test]
@@ -30,8 +30,8 @@ fn empty_log_file_leaves_default_intact_in_global_loader() {
     fs::write(&cfg_path, xml).unwrap();
 
   unsafe { std::env::set_var("ARIA_MOVE_CONFIG", &cfg_path); }
-    let cfg = aria_move::load_config_from_xml_path(&cfg_path).unwrap();
-    let def = Config::default();
-    assert_eq!(cfg.log_file.as_ref().map(|p| p.display().to_string()), def.log_file.as_ref().map(|p| p.display().to_string()));
+  let cfg = aria_move::load_config_from_xml_path(&cfg_path).unwrap();
+  let expected = aria_move::default_log_path().unwrap();
+  assert_eq!(cfg.log_file.as_ref().map(|p| p.display().to_string()), Some(expected.display().to_string()));
   unsafe { std::env::remove_var("ARIA_MOVE_CONFIG"); }
 }

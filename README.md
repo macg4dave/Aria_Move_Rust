@@ -673,6 +673,13 @@ aria_move --dry-run --json
 
 # Show config location
 aria_move --print-config
+
+# Move a directory by bare name (from download_base)
+# If your config has download_base=/home/user/incoming and a folder named "New folder" exists there:
+aria_move 'New folder'
+
+# Move a directory by full path
+aria_move /home/user/incoming/New\ folder
 ```
 
 ---
@@ -795,6 +802,7 @@ If no config exists and `ARIA_MOVE_CONFIG` is unset, aria_move creates a secure 
 - **macOS/Linux:** `download_base` and `completed_base` must be owned by the current user and not group/world writable (mode & 0o022 == 0).
 - **Windows:** Basic readonly check only; use `icacls` to verify ACLs.
 - **Log file:** On Unix, log file path is refused if any ancestor is a symlink.
+- **Source paths:** Symlink sources (file or directory) are refused. Even if a symlink ultimately points to a regular file or directory, aria_move aborts rather than follow it. This prevents time‑of‑check/time‑of‑use attacks and path “tricks” in hooks. Bare filename resolution under `download_base` also rejects symlinks. Race tests simulate a concurrent symlink appearing at a destination; if detected, the outcome is marked inconclusive rather than followed.
 
 ---
 

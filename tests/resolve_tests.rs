@@ -21,14 +21,13 @@ fn provided_path_file_ok() {
 }
 
 #[test]
-fn provided_path_dir_rejected() {
+fn provided_path_dir_ok() {
     let td = tempdir().unwrap();
     let d = td.path().join("d");
     fs::create_dir_all(&d).unwrap();
     let cfg = cfg_with(td.path());
-    let err = resolve_source_path(&cfg, Some(&d)).unwrap_err();
-    let s = format!("{err}");
-    assert!(s.contains("not a regular file"));
+    let got = resolve_source_path(&cfg, Some(&d)).unwrap();
+    assert_eq!(got, d);
 }
 
 #[test]

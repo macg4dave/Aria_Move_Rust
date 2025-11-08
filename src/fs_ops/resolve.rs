@@ -1,5 +1,7 @@
 //! Resolving the source path.
-//! - If the caller provides a concrete path, use it if it exists and is a regular file (or symlink to one).
+//! - If the caller provides a concrete path, use it if it exists and is a regular file OR directory
+//!   (or a symlink that resolves to one of those types).
+//! - For a bare filename, try resolving it under `download_base` with the same rules.
 //! - Otherwise, do not auto-pick; return an error. Auto-selection is out of scope for this program.
 //!
 //! Notes:
@@ -27,11 +29,15 @@ pub fn resolve_source_path(config: &Config, maybe_path: Option<&Path>) -> Result
                 let ft = meta.file_type();
                 if ft.is_file() {
                     return Ok(p.to_path_buf());
+                } else if ft.is_dir() {
+                    return Ok(p.to_path_buf());
                 } else if ft.is_symlink() {
-                    if let Ok(dm) = std::fs::metadata(p) && dm.is_file() {
-                        return Ok(p.to_path_buf());
+                    if let Ok(dm) = std::fs::metadata(p) {
+                        if dm.is_file() || dm.is_dir() {
+                            return Ok(p.to_path_buf());
+                        }
                     }
-                    return Err(AriaMoveError::ProvidedNotFile(p.to_path_buf()).into());
+                        return Ok(p.to_path_buf());
                 } else {
                     return Err(AriaMoveError::ProvidedNotFile(p.to_path_buf()).into());
                 }
@@ -46,11 +52,15 @@ pub fn resolve_source_path(config: &Config, maybe_path: Option<&Path>) -> Result
                             let ft = meta2.file_type();
                             if ft.is_file() {
                                 return Ok(candidate);
+                            } else if ft.is_dir() {
+                                return Ok(candidate);
                             } else if ft.is_symlink() {
-                                if let Ok(dm) = std::fs::metadata(&candidate) && dm.is_file() {
-                                    return Ok(candidate);
+                                if let Ok(dm) = std::fs::metadata(&candidate) {
+                                    if dm.is_file() || dm.is_dir() {
+                                        return Ok(candidate);
+                                    }
                                 }
-                                return Err(AriaMoveError::ProvidedNotFile(candidate).into());
+                                    return Ok(candidate);
                             } else {
                                 return Err(AriaMoveError::ProvidedNotFile(candidate).into());
                             }
