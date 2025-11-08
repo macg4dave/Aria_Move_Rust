@@ -125,6 +125,12 @@ pub fn run(args: Args) -> Result<()> {
     let result = (|| -> Result<()> {
         // Ensure required directories exist and canonicalize paths
         validate_and_normalize(&mut cfg)?;
+
+        // Headless-friendly: reconcile orphan temps and partial dirs before doing any work
+        if let Err(e) = crate::resume::reconcile(&cfg) {
+            // Non-fatal: log and continue. This cleanup is best-effort.
+            tracing::warn!(error = %e, "resume reconcile step failed; proceeding");
+        }
         let maybe_src_owned = args.resolved_source();
         // If user explicitly provided a directory, accept it directly (bypass file-only resolver)
         let src_result: Result<std::path::PathBuf> = if let Some(p) = maybe_src_owned.as_deref() {

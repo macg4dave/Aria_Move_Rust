@@ -5,43 +5,13 @@
 //! - fsync_dir: best-effort directory fsync after a rename (Unix only)
 
 // remove unused File import
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+// no longer need timestamp imports; deterministic resume temp uses hashing
 
-/// Generate a unique temp path within `dst_dir`.
-/// The file is not created here; callers typically pass the returned path to a function
-/// that uses create_new(true) to avoid clobbering an existing file.
-/// 
-/// Format: ".aria_move.<pid>.<nanos>[.<attempt>].tmp"
-pub(super) fn unique_temp_path(dst_dir: &Path) -> PathBuf {
-    let pid = std::process::id();
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-
-    // Try a few attempts in the astronomically unlikely case of a collision.
-    // We do NOT touch the filesystem here; io_copy will still open with create_new(true).
-    const MAX_TRIES: u32 = 5;
-    for attempt in 0..=MAX_TRIES {
-        let name = if attempt == 0 {
-            format!(".aria_move.{pid}.{nanos}.tmp")
-        } else {
-            format!(".aria_move.{pid}.{nanos}.{attempt}.tmp")
-        };
-        let candidate = dst_dir.join(name);
-        // Best-effort quick check to avoid a guaranteed AlreadyExists; not a race barrier.
-        if !candidate.exists() {
-            return candidate;
-        }
-    }
-
-    // Final fallback (should virtually never happen).
-    dst_dir.join(format!(
-        ".aria_move.{pid}.{nanos}.final.tmp"
-    ))
-}
+// unique_temp_path removed in favor of deterministic resume_temp_path.
 
 /// Return true if an io::Error represents a cross-device rename (EXDEV on Unix, NOT_SAME_DEVICE on Windows).
 pub(super) fn is_cross_device(e: &io::Error) -> bool {
@@ -77,4 +47,20 @@ pub(super) fn fsync_dir(dir: &Path) -> io::Result<()> {
 #[cfg(windows)]
 pub(super) fn fsync_dir(_dir: &Path) -> io::Result<()> {
     Ok(())
+}
+
+/// Deterministic resume temp path for a given final destination.
+/// Format: ".aria_move.resume.<hexhash>.tmp" where hash is of the absolute dest path.
+/// Public for use in integration tests to simulate partial copies.
+pub fn resume_temp_path(dest: &Path) -> PathBuf {
+    let mut hasher = DefaultHasher::new();
+    // Hash the full, lossy-display path for stability across runs.
+    // Canonicalization is optional; use as-provided to match caller's computed dest.
+    dest.to_string_lossy().hash(&mut hasher);
+    let h = hasher.finish();
+    let name = format!(".aria_move.resume.{:016x}.tmp", h);
+    match dest.parent() {
+        Some(p) => p.join(name),
+        None => PathBuf::from(name),
+    }
 }

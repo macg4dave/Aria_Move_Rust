@@ -3,6 +3,7 @@
 
 mod app;
 mod logging;
+mod resume;
 
 fn main() {
     let args = aria_move::cli::parse();

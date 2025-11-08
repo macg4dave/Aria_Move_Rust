@@ -12,7 +12,7 @@
 //! original metadata length if stricter validation is required.
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufReader, BufWriter, Write};
+use std::io::{self, BufReader, BufWriter, Seek, SeekFrom, Write};
 use std::path::Path;
 
 /// Durability mode controlling post-write flush behavior.
@@ -168,6 +168,32 @@ pub(super) fn copy_streaming_ex(
     }
 
     Ok(CopyResult { bytes, buf_size: BUF_SIZE, mode })
+}
+
+/// Resume variant: append remaining bytes to an existing temp file that is smaller than the source.
+/// Preconditions: `dst` exists, its length == `offset`, and `offset < source_size`.
+/// Returns the final total bytes written (should equal source size on success).
+pub(super) fn copy_streaming_resume(src: &Path, dst: &Path, offset: u64) -> io::Result<u64> {
+    let src_f = File::open(src)?;
+    let src_meta = src_f.metadata()?;
+    let total = src_meta.len();
+    if offset >= total { return Ok(offset); }
+
+    let mut dst_f = OpenOptions::new().write(true).read(true).open(dst)?;
+    let cur_len = dst_f.metadata()?.len();
+    if cur_len != offset { return Err(io::Error::new(io::ErrorKind::InvalidInput, "resume offset mismatch")); }
+
+    // Seek source to offset and destination to end.
+    let mut reader = BufReader::new(src_f);
+    reader.seek(SeekFrom::Start(offset))?;
+    dst_f.seek(SeekFrom::Start(offset))?; // should already be at end, but enforce
+    let mut writer = BufWriter::new(dst_f);
+
+    let copied = io::copy(&mut reader, &mut writer)?;
+    writer.flush()?;
+    writer.get_ref().sync_all()?; // durability same as full mode
+
+    Ok(offset + copied)
 }
 
 #[cfg(test)]
