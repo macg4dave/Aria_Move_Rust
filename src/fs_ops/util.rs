@@ -69,6 +69,7 @@ pub(super) fn is_cross_device(e: &io::Error) -> bool {
 /// On Windows, this is a no-op (directory handles can’t be fsynced portably).
 #[cfg(unix)]
 pub(super) fn fsync_dir(dir: &Path) -> io::Result<()> {
+    use std::fs::File;
     let f = File::open(dir)?;
     f.sync_all()
 }

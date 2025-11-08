@@ -8,6 +8,7 @@
 
 - [Requirements & Build Tools](#requirements--build-tools)
 - [Windows 11 + VS Code Setup](#windows-11--vs-code-setup)
+ - [Fedora (Workstation/Server) + VS Code Setup](#fedora-workstationserver--vs-code-setup)
 - [Installation](#installation)
 - [Usage](#usage)
     - [--help snapshot](#help-snapshot)
@@ -367,6 +368,197 @@ pwsh scripts/pre_push.ps1
 ---
 
 This completes a full Windows 11 + VS Code environment setup. You can now modify code in VS Code, use Rust Analyzer for inline diagnostics, run tasks, and debug with your chosen adapter.
+
+---
+
+## Fedora (Workstation/Server) + VS Code Setup
+
+End-to-end steps to build, test, and debug `aria_move` on Fedora using VS Code. Tested on Fedora 40/41 Workstation, but applies to recent Fedora or RHEL/CentOS Stream derivatives (replace `dnf` with `yum` where needed).
+
+### 1. Overview
+
+You will install: system build toolchain, Rust (rustup), Visual Studio Code, recommended extensions, then run builds/tests. OpenSSL dev headers and pkg-config are required by crates; Fedora provides them via `openssl-devel` and `pkgconf-pkg-config`.
+
+### 2. Prerequisites
+
+- Fedora (Workstation or Server) with latest updates
+- User with sudo rights
+- Internet access
+
+### 3. System Packages
+
+Install development tools and native deps:
+
+```bash
+sudo dnf groupinstall -y "Development Tools"
+sudo dnf install -y git curl pkgconf-pkg-config openssl-devel
+```
+
+Optional extras:
+
+```bash
+sudo dnf install -y lldb # if you prefer system LLDB for debugging
+```
+
+### 4. Install Rust (rustup)
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+rustup default stable
+rustup component add rustfmt clippy
+rustc --version
+cargo --version
+```
+
+### 5. Install Visual Studio Code
+
+Add Microsoft repository (one-time):
+
+```bash
+sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc
+sudo sh -c 'echo -e "[code]\nname=Visual Studio Code\nbaseurl=https://packages.microsoft.com/yumrepos/vscode\nenabled=1\ngpgcheck=1\ngpgkey=https://packages.microsoft.com/keys/microsoft.asc" > /etc/yum.repos.d/vscode.repo'
+sudo dnf check-update || true
+sudo dnf install -y code
+```
+
+### 6. Recommended VS Code Extensions
+
+Search / install:
+
+- Rust Analyzer (`rust-lang.rust-analyzer`)
+- CodeLLDB (`vadimcn.vscode-lldb`)
+- Even Better TOML (`tamasfe.even-better-toml`)
+- Error Lens (`usernamehw.errorlens`)
+- EditorConfig (`EditorConfig.EditorConfig`)
+
+`./.vscode/extensions.json` lists these as recommendations.
+
+### 7. Clone Repository
+
+```bash
+git clone https://github.com/macg4dave/Aria_Move_Rust.git
+cd Aria_Move_Rust
+code .
+```
+
+Rust Analyzer will index the workspace automatically.
+
+### 8. Verify Toolchain
+
+```bash
+rustup show
+rustup toolchain list
+cargo check
+```
+
+Expect `stable-x86_64-unknown-linux-gnu` and a successful `cargo check`.
+
+### 9. Build & Run
+
+Debug build:
+
+```bash
+cargo build
+./target/debug/aria_move --help
+```
+
+Release build:
+
+```bash
+cargo build --release
+./target/release/aria_move --dry-run example-task 1 /tmp/example.file
+```
+
+### 10. Run Tests & Quality Gates
+
+```bash
+cargo test
+cargo clippy --all-targets --all-features -- -D warnings
+cargo fmt --all --check
+```
+
+If formatting fails:
+
+```bash
+cargo fmt --all
+```
+
+### 11. VS Code Tasks
+
+Convenient tasks are provided in `./.vscode/tasks.json` (Build Debug, Build Release, Test, Clippy, Fmt Check). Run via: Terminal > Run Task…
+
+### 12. Debugging (CodeLLDB)
+
+Launch configs in `./.vscode/launch.json` include a direct binary run with sample arguments. Build first:
+
+```bash
+cargo build
+```
+
+Then press F5 and select `Debug aria_move (Linux/Fedora)`.
+
+### 13. Features
+
+Optional features in `Cargo.toml`:
+
+- `xattrs` (Linux/macOS only)
+- `test-helpers` (adds tempfile for tests)
+
+Enable when testing:
+
+```bash
+cargo test --features xattrs,test-helpers
+```
+
+### 14. Configuration Path
+
+Default (Linux): `~/.config/aria_move/config.xml`
+
+Override for a single run:
+
+```bash
+ARIA_MOVE_CONFIG=/custom/path/config.xml ./target/debug/aria_move --print-config
+```
+
+### 15. Common Issues
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| OpenSSL not found | Missing dev headers | Install `openssl-devel` |
+| pkg-config errors | `pkgconf-pkg-config` absent | Install package listed in step 3 |
+| Clippy warns | Style / lint issues | Address, re-run `cargo clippy -- -D warnings` |
+| Slow first build | Crate compilation | Subsequent incremental builds faster |
+| Rust Analyzer lag | Indexing / no `cargo check` yet | Run `cargo check` manually |
+
+### 16. Updating
+
+```bash
+rustup update
+cargo update
+```
+
+### 17. Pre-Push Local Check
+
+Optional script (create `scripts/pre_push.sh`):
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+cargo fmt --all
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test
+```
+
+Run manually:
+
+```bash
+./scripts/pre_push.sh
+```
+
+---
+
+This completes a full Fedora + VS Code environment setup. You can now develop, test, lint, and debug `aria_move` efficiently on Linux.
 
 ---
 

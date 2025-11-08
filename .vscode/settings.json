@@ -1,0 +1,29 @@
+{
+    "rust-analyzer.checkOnSave.command": "clippy",
+    "rust-analyzer.checkOnSave.extraArgs": [
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+    ],
+    "rust-analyzer.cargo.buildScripts.enable": true,
+    "rust-analyzer.procMacro.enable": true,
+    "editor.formatOnSave": true,
+    "files.watcherExclude": {
+        "**/target/**": true
+    },
+    // Ensure VS Code uses bash and can find cargo even if the shell doesn't source ~/.cargo/env
+    "terminal.integrated.defaultProfile.linux": "bash",
+    "terminal.integrated.profiles.linux": {
+        "bash": {
+            "path": "/bin/bash",
+            "args": [
+                "-l"
+            ]
+        }
+    },
+    "terminal.integrated.env.linux": {
+        "PATH": "${env:HOME}/.cargo/bin:${env:PATH}"
+    }
+}

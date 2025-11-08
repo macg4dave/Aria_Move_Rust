@@ -27,8 +27,8 @@ mod tests {
         let ft = filetime::FileTime::from_system_time(past);
         filetime::set_file_times(&src, ft, ft).unwrap();
 
-        // Run move with preserve_metadata=true
-        let mut cfg = Config::new(&download, &completed, Duration::from_secs(60));
+    // Run move with preserve_metadata=true
+    let mut cfg = Config::new(&download, &completed);
         cfg.preserve_metadata = true;
         let dest = move_file(&cfg, &src).unwrap();
 
