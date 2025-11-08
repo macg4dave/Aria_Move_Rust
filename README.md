@@ -105,6 +105,111 @@ on-download-complete=C:\Tools\aria_move_hook.bat
 
 ---
 
+## Running aria2c under systemd (Linux)
+
+Run aria2 as a service for reliability and auto-start on boot.
+
+### 1) Create configuration and state
+
+Paths used below (customize to your environment):
+
+- Config: `/etc/aria2/aria2.conf`
+- Session file: `/var/lib/aria2/aria2.session`
+- Logs: `/var/log/aria2/aria2.log`
+- Download dir (staging): `/data/incoming`
+- Completed dir (final): `/data/completed`
+
+Create dirs and an empty session file:
+
+```bash
+sudo mkdir -p /etc/aria2 /var/lib/aria2 /var/log/aria2 /data/incoming /data/completed
+sudo touch /var/lib/aria2/aria2.session
+```
+
+Minimal `/etc/aria2/aria2.conf`:
+
+```ini
+dir=/data/incoming
+continue=true
+
+# Session persistence
+save-session=/var/lib/aria2/aria2.session
+input-file=/var/lib/aria2/aria2.session
+save-session-interval=60
+
+# RPC (optional for remote control)
+enable-rpc=true
+rpc-listen-all=false
+rpc-secret=change_me
+
+# Hook: call aria_move via wrapper
+on-download-complete=/usr/local/bin/aria_move_hook.sh
+
+# Logging
+log=/var/log/aria2/aria2.log
+log-level=notice
+```
+
+Ensure your wrapper exists and is executable at `/usr/local/bin/aria_move_hook.sh`.
+
+### 2) Create systemd unit
+
+`/etc/systemd/system/aria2c.service`:
+
+```ini
+[Unit]
+Description=aria2c download service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aria2
+Group=aria2
+WorkingDirectory=/var/lib/aria2
+Environment=PATH=/usr/local/bin:/usr/bin
+ExecStart=/usr/bin/aria2c --conf-path=/etc/aria2/aria2.conf
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65536
+
+# Allow writing to these paths if using systemd system restrictions
+ReadWritePaths=/data/incoming /data/completed /var/lib/aria2 /var/log/aria2
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Create the `aria2` user/group and set ownership:
+
+```bash
+sudo useradd --system --create-home --home-dir /var/lib/aria2 --shell /usr/sbin/nologin aria2 || true
+sudo chown -R aria2:aria2 /var/lib/aria2 /var/log/aria2 /data/incoming /data/completed
+sudo chown root:root /etc/aria2
+```
+
+Enable and start:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now aria2c
+sudo systemctl status aria2c --no-pager
+```
+
+Tail logs:
+
+```bash
+journalctl -u aria2c -f
+```
+
+Notes:
+
+- The hook path in `aria2.conf` must be absolute and executable.
+- Ensure the service user has read/write permissions to the download and completed directories.
+- If you customize directories, update both `aria2.conf` and your `aria_move` configuration accordingly.
+
+---
+
 ## Configuration
 
 On first run (without a config file), aria_move creates a template at:
