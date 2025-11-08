@@ -91,9 +91,11 @@ Minimal XML template (with comments):
   <log_level>normal</log_level>
   <!-- Optional: full path to log file -->
   <log_file>/path/to/aria_move.log</log_file>
-  <!-- Preserve permissions and mtime when moving (slower) -->
-  <preserve_metadata>false</preserve_metadata>
-    <!-- Recency window removed from XML; configure recency via runtime defaults or CLI -->
+    <!-- Preserve permissions, timestamps and xattrs (feature) when moving (slower) -->
+    <preserve_metadata>false</preserve_metadata>
+    <!-- Preserve only permissions (ignored if preserve_metadata=true) -->
+    <preserve_permissions>false</preserve_permissions>
+    <!-- Recency is no longer configurable via XML; runtime default window or CLI flags govern auto-resolution. -->
 </config>
 ```
 
@@ -275,7 +277,8 @@ When integrating with aria2, these are typically passed by the download-complete
 | `--log-level <LEVEL>`               | quiet, normal, info, debug                       |
 | `--print-config`                    | Show config file location and exit               |
 | `--dry-run`                         | Log actions without modifying filesystem         |
-| `--preserve-metadata`               | Preserve file permissions and mtime              |
+| `--preserve-metadata`               | Preserve permissions, timestamps, xattrs (feature)|
+| `--preserve-permissions`            | Preserve only permissions (faster)               |
 | `--json`                            | Emit logs in JSON format                         |
 
 ### Examples
@@ -320,7 +323,8 @@ OPTIONS:
         --log-level <LEVEL>         Set log level: quiet, normal, info, debug
         --print-config              Print the config file location used by aria_move and exit
         --dry-run                   Show what would be done, but do not modify files/directories
-        --preserve-metadata         Preserve file permissions and mtime when moving (slower)
+    --preserve-metadata         Preserve permissions, timestamps and xattrs (when enabled); slower
+    --preserve-permissions      Preserve only permissions (mode/readonly); faster than --preserve-metadata
         --json                      Emit logs in structured JSON
     -h, --help                       Print help
     -V, --version                    Print version
@@ -490,15 +494,14 @@ When no explicit `SOURCE_PATH` is provided, aria_move can resolve a candidate fr
 - Fallback mode: If none are recent, falls back to the newest overall (configurable).
 - Errors and interruptions: Reports invalid bases, permission-denied entries, and cooperates with shutdown requests.
 
-## Metadata preservation (one flag)
+## Metadata & permissions preservation
 
-The `preserve_metadata` flag controls all metadata preservation in a single switch:
+Two related flags allow tuning cost vs fidelity:
 
-- Permissions and read-only bits
-- Modified time (mtime)
-- Extended attributes (xattrs) when compiled with the optional `xattr` feature
+- `--preserve-metadata`: best-effort full preservation (permissions, timestamps (mtime/atime where supported), and xattrs when the `xattrs` feature is enabled). Implies permissions even if `preserve_permissions` not set.
+- `--preserve-permissions`: copy only permission bits (Unix mode / Windows readonly). Faster than full metadata; ignored if `--preserve-metadata` is also set.
 
-Preservation is best-effort and integrated into both atomic rename and copy+rename flows.
+Preservation is best-effort in both rename and copy fallback paths. Failures to set individual attributes are logged at debug level and do not abort the move.
 
 ## Disk space pre-flight check
 
