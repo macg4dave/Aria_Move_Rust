@@ -3,6 +3,9 @@ name: Release Artifacts
 on:
   release:
     types: [created]
+  push:
+    tags:
+      - v*
   workflow_dispatch:
     inputs:
       tag_name:

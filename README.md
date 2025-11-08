@@ -718,7 +718,7 @@ aria_move /home/user/incoming/New\ folder
 ### --help snapshot (example)
 
 ```
-aria_move 0.6.0
+aria_move 1.0.0
 Move completed aria2 downloads safely (Rust)
 
 USAGE:
