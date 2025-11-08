@@ -81,13 +81,32 @@ Add to `aria2.conf`:
 on-download-complete=/usr/local/bin/aria_move_hook.sh
 ```
 
-### Windows
+### Windows (PowerShell wrapper)
 
-Create `C:\Tools\aria_move_hook.bat`:
+Create `C:\Tools\aria_move_hook.ps1` (PowerShell):
+
+```powershell
+# C:\Tools\aria_move_hook.ps1
+param($gid, $numFiles, $sourcePath)
+
+# Optional: point to a system-wide config (create as Administrator)
+$env:ARIA_MOVE_CONFIG = 'C:\ProgramData\aria_move\config.xml'
+
+# Invoke the aria_move executable with the arguments passed by aria2
+& 'C:\Tools\aria_move.exe' $gid $numFiles $sourcePath
+```
+
+If aria2 expects a batch/script path, create a simple shim `C:\Tools\aria_move_hook.bat` that invokes PowerShell:
 
 ```bat
 @echo off
-"C:\Tools\aria_move.exe" %1 %2 %3
+powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Tools\aria_move_hook.ps1" %1 %2 %3
+```
+
+Add to `aria2.conf` (use the .bat shim or point directly to the .ps1):
+
+```ini
+on-download-complete=C:\Tools\aria_move_hook.bat
 ```
 
 ### Running under systemd (non-interactive first run)
