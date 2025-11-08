@@ -45,10 +45,10 @@ const GENERIC_WRITE: u32 = 0x4000_0000;
 /// Public for integration tests / advanced callers; stability not guaranteed.
 pub struct DirLock {
     #[cfg(unix)]
-    file: File,
+    file: File, // on Unix we lock the directory fd directly
     #[cfg(windows)]
-    handle: isize, // HANDLE
-    _path: PathBuf,
+    handle: isize, // HANDLE for the hidden lock file
+    _path: PathBuf, // for logs; on Windows this is the lock file path, on Unix the directory path
 }
 
 impl Drop for DirLock {
@@ -64,11 +64,12 @@ impl Drop for DirLock {
                 let _ = CloseHandle(self.handle as _);
             }
         }
-        // Try to remove the on-disk lock file name when dropping the guard so that
-        // completed operations don't leave stale `.aria_move.dir.lock` files behind.
-        // This is best-effort: removal may fail if other processes still hold or have
-        // recreated the lock file; ignore errors.
-        let _ = std::fs::remove_file(&self._path);
+        // On Windows, we use a hidden on-disk lock file — try to remove it on drop.
+        // On Unix, we flock the directory fd directly and there is no lock file.
+        #[cfg(windows)]
+        {
+            let _ = std::fs::remove_file(&self._path);
+        }
     }
 }
 
@@ -80,19 +81,16 @@ fn lock_file_path(dir: &Path) -> PathBuf {
 /// Blocks until acquired. Returns a guard that releases on drop.
 /// Blocking acquire of a directory lock. Waits until the lock is available.
 pub fn acquire_dir_lock(dir: &Path) -> io::Result<DirLock> {
-    let lock_path = lock_file_path(dir);
     let start = Instant::now();
 
     #[cfg(unix)]
     {
-        // Create or open the lock file with restrictive permissions on first creation.
+        // Open the directory itself and apply an advisory flock on its fd.
+        // This avoids creating any files and reduces permission requirements.
         let f = OpenOptions::new()
             .read(true)
-            .write(true)
-            .create(true)
-            .custom_flags(libc::O_CLOEXEC)
-            .mode(0o600)
-            .open(&lock_path)?;
+            .custom_flags(libc::O_CLOEXEC | libc::O_DIRECTORY)
+            .open(dir)?;
 
         // Block until an exclusive lock is acquired.
         let rc = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) };
@@ -101,18 +99,19 @@ pub fn acquire_dir_lock(dir: &Path) -> io::Result<DirLock> {
         }
         let waited = start.elapsed();
         if waited.is_zero() {
-            trace!(path = %lock_path.display(), "lock acquired immediately");
+            trace!(path = %dir.display(), "lock acquired immediately");
         } else {
-            trace!(path = %lock_path.display(), waited_ms = waited.as_millis() as u64, "lock acquired after wait");
+            trace!(path = %dir.display(), waited_ms = waited.as_millis() as u64, "lock acquired after wait");
         }
         Ok(DirLock {
             file: f,
-            _path: lock_path,
+            _path: dir.to_path_buf(),
         })
     }
 
     #[cfg(windows)]
     {
+        let lock_path = lock_file_path(dir);
         use std::iter::once;
         use std::os::windows::ffi::OsStrExt;
         use std::thread::sleep;
@@ -172,32 +171,28 @@ pub fn acquire_dir_lock(dir: &Path) -> io::Result<DirLock> {
 /// Non-blocking attempt to acquire a directory lock.
 /// Returns Ok(None) if lock is currently held elsewhere.
 pub fn try_acquire_dir_lock(dir: &Path) -> io::Result<Option<DirLock>> {
-    let lock_path = lock_file_path(dir);
     let start = Instant::now();
 
     #[cfg(unix)]
     {
         let f = OpenOptions::new()
             .read(true)
-            .write(true)
-            .create(true)
-            .custom_flags(libc::O_CLOEXEC)
-            .mode(0o600)
-            .open(&lock_path)?;
+            .custom_flags(libc::O_CLOEXEC | libc::O_DIRECTORY)
+            .open(dir)?;
 
         let rc = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
         if rc == 0 {
-            trace!(path = %lock_path.display(), waited_ms = start.elapsed().as_millis() as u64, "try-lock success");
+            trace!(path = %dir.display(), waited_ms = start.elapsed().as_millis() as u64, "try-lock success");
             return Ok(Some(DirLock {
                 file: f,
-                _path: lock_path,
+                _path: dir.to_path_buf(),
             }));
         }
         let err = io::Error::last_os_error();
         if let Some(code) = err.raw_os_error()
             && code == libc::EWOULDBLOCK
         {
-            trace!(path = %lock_path.display(), "try-lock would block");
+            trace!(path = %dir.display(), "try-lock would block");
             return Ok(None);
         }
         Err(err)
@@ -205,6 +200,7 @@ pub fn try_acquire_dir_lock(dir: &Path) -> io::Result<Option<DirLock>> {
 
     #[cfg(windows)]
     {
+        let lock_path = lock_file_path(dir);
         use std::iter::once;
         use std::os::windows::ffi::OsStrExt;
 
