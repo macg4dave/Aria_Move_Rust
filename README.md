@@ -8,7 +8,75 @@
 
 ---
 
+## Quick start (end users)
+
+### Download
+
+- Go to Releases: https://github.com/macg4dave/Aria_Move_Rust/releases/latest
+- Pick your OS/CPU:
+    - Linux: x86_64 or aarch64
+    - macOS: universal2 (single binary for Apple Silicon + Intel)
+    - Windows: x86_64
+
+### Install
+
+- Unpack the archive and place the `aria_move` binary somewhere on your PATH, e.g.:
+    - Linux/macOS: `/usr/local/bin` or `~/.local/bin`
+    - Windows: a folder on your PATH (e.g., `C:\Tools`) and rename to `aria_move.exe` if needed
+- Make it executable (Linux/macOS): `chmod +x aria_move`
+
+### Verify
+
+```
+aria_move --version
+```
+
+### Usage essentials
+
+- Default behavior: move a finished download from your download base to your completed base.
+- Dry run first:
+
+```
+aria_move --dry-run --json
+```
+
+- Move a directory by name (relative to your configured download base):
+
+```
+aria_move 'My Folder'
+```
+
+- Move by full path:
+
+```
+aria_move /path/to/downloads/My\ Folder
+```
+
+- Show the active config path:
+
+```
+aria_move --print-config
+```
+
+### Integrate with aria2 (quick)
+
+Point aria2’s on-download-complete hook to a tiny shell/batch wrapper that calls `aria_move` with the values aria2 passes. See the detailed examples below in [Integration with aria2](#integration-with-aria2).
+
+### Troubleshooting
+
+- Permission denied (Linux/macOS): ensure `chmod +x aria_move`, and that the install location is on PATH.
+- macOS “cannot be opened” (Gatekeeper): run `xattr -d com.apple.quarantine ./aria_move` once, or right-click → Open.
+- “Refusing to use log path with symlink ancestor” (Unix): choose a log directory that isn’t inside or behind symlinks.
+- “Not enough free space”: free space is checked before cross-device copies; ensure the destination filesystem has room.
+- Windows “Access denied”: another process may be locking the file; close viewers/AV scans and retry.
+- Need detailed logs: use `--json` or set `--log-level debug`.
+
+---
+
 ## Table of Contents
+
+- [Quick start (end users)](#quick-start-end-users)
+- [Troubleshooting](#troubleshooting)
 
 - [Requirements & Build Tools](#requirements--build-tools)
 - [Windows 11 + VS Code Setup](#windows-11--vs-code-setup)
@@ -83,6 +151,10 @@ Local dry-run:
 ```
 
 Artifacts will appear in `target/dist` (no upload).
+
+## For sysadmins & developers
+
+The sections below cover system setup, building from source, CI/release automation, and development tools.
 
 ## Requirements & build tools
 
