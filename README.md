@@ -31,7 +31,6 @@ Designed for ease-of-use and reliability: quick sensible defaults, a tiny XML co
 - Plug-and-play with aria2 (or any hook) — pass the task id, file count and source path and you're done.
 - Fast and efficient: atomic renames when possible, reliable copy+rename fallback across filesystems.
 - Safe for production: symlink defenses, disk-space checks (Unix), and secure log/config file handling.
-- Clear observability: compact human logs or JSON for structured pipelines and log aggregation.
 
 ## Key features (end users)
 
@@ -40,6 +39,7 @@ Designed for ease-of-use and reliability: quick sensible defaults, a tiny XML co
 - Optional preservation of file permissions and timestamps
 - Secure defaults: refuses to use log paths with symlinked ancestors on Unix
 - Creates a secure template config on first run if none exists
+- Cross-platform (macOS, Linux, Windows)
 
 ## Key features (for developers & integrators)
 
@@ -48,70 +48,6 @@ Designed for ease-of-use and reliability: quick sensible defaults, a tiny XML co
 - Structured, documented errors (AriaMoveError) for easy assertion in integration tests
 - Traces and optional JSON logs for integration with log collectors
 - Easy to extend: clear fs/ and platform/ boundaries to add features safely
-
-## Features
-
-- Atomic rename when possible; safe copy+rename fallback
- - Optional metadata preservation (single flag): permissions, mtime, and xattrs (when feature enabled)
-- Disk space check (Unix)
-- Refuses log paths under symlinked ancestors
-- Structured logging (human or JSON)
-- Clear, testable error kinds
-- Cross-platform (macOS, Linux, Windows)
-
----
-
-## Quickstart (3 steps)
-
-1. **Install**
-
-```bash
-cargo install --path .
-```
-
-2. **First run: generate a secure template config**
-
-Run once so aria_move creates a config if none exists, then edit it:
-
-```bash
-aria_move --print-config
-# If no config exists, aria_move will create a secure template and exit.
-# Edit the file shown to set your download_base and completed_base.
-```
-
-Minimal XML template (with comments):
-
-```xml
-<config>
-  <!-- Where partial/new downloads appear -->
-  <download_base>/path/to/incoming</download_base>
-  <!-- Final destination for completed items -->
-  <completed_base>/path/to/completed</completed_base>
-  <!-- quiet | normal | info | debug -->
-  <log_level>normal</log_level>
-  <!-- Optional: full path to log file -->
-  <log_file>/path/to/aria_move.log</log_file>
-    <!-- Preserve permissions, timestamps and xattrs (feature) when moving (slower) -->
-    <preserve_metadata>false</preserve_metadata>
-    <!-- Preserve only permissions (ignored if preserve_metadata=true) -->
-    <preserve_permissions>false</preserve_permissions>
-    <!-- Recency is no longer configurable via XML; runtime default window or CLI flags govern auto-resolution. -->
-</config>
-```
-
-3. **Run a move**
-
-Auto-resolve most recent file from download_base and move it:
-
-```bash
-aria_move
-```
-
-With explicit args (typical aria2 hook):
-
-```bash
-aria_move 7b3f1234 1 /path/to/incoming/file.iso
-```
 
 ---
 
@@ -435,112 +371,21 @@ aria_move -d
 
 ---
 
-## Development
-
-### Build
-
-```bash
-cargo build
-cargo build --release
-```
-
-### Format and Lint
-
-```bash
-cargo fmt
-cargo clippy --all-targets -- -D warnings
-```
-
-### Run Tests
-
-```bash
-cargo test
-```
-
----
-
-## Troubleshooting
-
-### Proc-macro ABI mismatch
-
-```bash
-cargo clean
-rm -rf target
-rustup update stable && rustup default stable
-cargo check
-```
-
-### "unresolved import aria_move"
-
-```toml
-[package]
-name = "aria_move"
-```
-
-### Windows
-
-Use `icacls` to inspect ACLs; disk space check is Unix-only.
-
----
-
-## Resolution behavior (auto-selecting a source)
-
-When no explicit `SOURCE_PATH` is provided, aria_move can resolve a candidate from `download_base`:
-
-- Depth limit: Scans to a bounded depth to avoid expensive walks.
-- Recency window: Prefers files modified within a recent time window.
-- Deterministic tie-break: If multiple candidates share the same mtime, the lexicographically smallest path wins.
-- Pattern filters: Skips known temporary suffixes like `.part` or `.tmp`, and zero-length files.
-- Fallback mode: If none are recent, falls back to the newest overall (configurable).
-- Errors and interruptions: Reports invalid bases, permission-denied entries, and cooperates with shutdown requests.
-
-## Metadata & permissions preservation
-
-Two related flags allow tuning cost vs fidelity:
-
-- `--preserve-metadata`: best-effort full preservation (permissions, timestamps (mtime/atime where supported), and xattrs when the `xattrs` feature is enabled). Implies permissions even if `preserve_permissions` not set.
-- `--preserve-permissions`: copy only permission bits (Unix mode / Windows readonly). Faster than full metadata; ignored if `--preserve-metadata` is also set.
-
-Preservation is best-effort in both rename and copy fallback paths. Failures to set individual attributes are logged at debug level and do not abort the move.
-
-## Disk space pre-flight check
-
-Before copying large trees across filesystems, aria_move performs a best-effort free space check on the destination filesystem:
-
-- Cushion: Uses a small fixed cushion (4 MiB) to account for metadata/journal/temp files.
-- Conservative estimate: On Unix, relies on user-available blocks for safety.
-- Racy by nature: The check is a pre-flight; actual free space may change between check and copy.
-- Typed error: On insufficient space, returns `InsufficientSpace` with required/available bytes and destination path.
-
-Tip: For deterministic tests, internal helpers validate the cushion logic independent of real disk space.
-
-## Prebuilt Binaries
-
-If you publish releases, attach signed archives for macOS, Linux, and Windows on your Releases page. Verify checksums after download.
-
-```bash
-# macOS/Linux
-shasum -a 256 aria_move-*.tar.gz
-# Windows (PowerShell)
-Get-FileHash .\aria_move-*.zip -Algorithm SHA256
-```
-
-Consider publishing a `CHECKSUMS.txt` and signing it (GPG) for verification.
-
----
-
 ## Platform Feature Matrix
 
-| Feature                         | macOS | Linux | Windows |
-|---------------------------------|:-----:|:-----:|:-------:|
-| Atomic rename                   | ✅    | ✅    | ✅      |
-| Safe copy+rename fallback       | ✅    | ✅    | ✅      |
-| Metadata preservation           | ✅    | ✅    | ✅ (basic) |
-| Disk space check                | ✅    | ✅    | ❌      |
-| Directory security validation   | ✅    | ✅    | ⚠️ (readonly only) |
-| Symlink ancestor detection      | ✅    | ✅    | ❌      |
-| O_NOFOLLOW log open             | ✅    | ✅    | ❌      |
-| Structured logging (JSON)       | ✅    | ✅    | ✅      |
+| Feature                               | macOS | Linux | Windows |
+|---------------------------------------|:-----:|:-----:|:-------:|
+| Atomic rename (files/dirs)            | ✅    | ✅    | ✅      |
+| Safe copy+rename fallback             | ✅    | ✅    | ✅      |
+| --preserve-metadata (perms+mtime)     | ✅    | ✅    | ✅ (mtime partial) |
+| --preserve-permissions (mode/ro)      | ✅    | ✅    | ✅ (readonly) |
+| Extended attributes (xattrs feature)  | ✅    | ✅    | ❌      |
+| Disk space pre-flight (copy fallback) | ✅    | ✅    | ❌      |
+| Directory permission validation       | ✅    | ✅    | ⚠️ (readonly only) |
+| Symlink ancestor defense (log path)   | ✅    | ✅    | ❌      |
+| O_NOFOLLOW log open                   | ✅    | ✅    | ❌      |
+| Structured logging (JSON)             | ✅    | ✅    | ✅      |
+| Auto-resolution recent window (code)  | ✅    | ✅    | ✅      |
 
 ---
 
@@ -556,8 +401,3 @@ MIT
 ## Contributing
 
 Contributions welcome! Please open an issue or pull request. Ensure all tests pass and code is formatted/linted.
-
-- Run `cargo fmt`
-- Run `cargo clippy --all-targets -- -D warnings`
-- Run `cargo test`
-- Update this README if adding features
