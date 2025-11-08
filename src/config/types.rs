@@ -3,7 +3,6 @@
 //! - LogLevel represents verbosity with simple parsing helpers.
 
 use std::path::PathBuf;
-use std::time::Duration;
 use std::fmt;
 use std::str::FromStr;
 
@@ -75,8 +74,7 @@ pub struct Config {
     pub preserve_permissions: bool,
     // Single switch: when true, preserve all available metadata (times, perms, readonly, xattrs).
     // When false, preserve nothing.
-    /// Recency window for auto-resolving recent files
-    pub recent_window: Duration,
+    // (auto-pick recency window removed; explicit source path required)
 }
 
 impl Default for Config {
@@ -90,24 +88,20 @@ impl Default for Config {
             dry_run: false,
             preserve_metadata: false,
             preserve_permissions: false,
-            
-            // Default to 5 minutes of recency
-            recent_window: Duration::from_secs(60 * 5),
+            // no auto-pick window
         }
     }
 }
 
 impl Config {
-    /// Construct a Config with explicit bases and recency; other fields use defaults.
+    /// Construct a Config with explicit bases; other fields use defaults.
     pub fn new(
         download_base: impl Into<PathBuf>,
         completed_base: impl Into<PathBuf>,
-        recent_window: Duration,
     ) -> Self {
         Self {
             download_base: download_base.into(),
             completed_base: completed_base.into(),
-            recent_window,
             ..Default::default()
         }
     }

@@ -14,12 +14,11 @@
 //!   - acquire_move_lock(src_path)       // serialize per-source (parent dir)
 //!   - acquire_dir_lock(destination_dir) // serialize finalization into destination
 
+#[cfg(unix)]
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-#[cfg(windows)]
-use std::time::Duration;
 #[cfg(windows)]
 use tracing::warn;
 use tracing::trace;

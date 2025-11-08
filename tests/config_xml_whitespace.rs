@@ -22,7 +22,6 @@ fn trims_whitespace_in_xml_values() {
     assert_eq!(cfg.download_base, download);
     assert_eq!(cfg.completed_base, completed);
     assert_eq!(cfg.log_level, LogLevel::Info);
-  // recent_window is not configurable via XML; it should remain default (300s)
-  assert_eq!(cfg.recent_window.as_secs(), 300);
+  // auto-pick window removed; no assertion for recency.
   assert_eq!(cfg.log_file.as_ref().unwrap().display().to_string(), log_file.display().to_string());
 }

@@ -7,7 +7,7 @@
 //! - Disk space query uses GetDiskFreeSpaceExW.
 
 use anyhow::{bail, Context, Result};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use windows_sys::Win32::Storage::FileSystem::{

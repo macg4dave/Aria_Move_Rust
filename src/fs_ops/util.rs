@@ -4,7 +4,7 @@
 //! - is_cross_device: detect cross-filesystem rename errors (EXDEV/ERROR_NOT_SAME_DEVICE)
 //! - fsync_dir: best-effort directory fsync after a rename (Unix only)
 
-use std::fs::File;
+// remove unused File import
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};

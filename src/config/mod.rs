@@ -9,7 +9,7 @@ pub mod xml;
 use anyhow::{anyhow, Context, Result};
 use std::fs;
 use std::io::{self, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 pub use types::{Config, LogLevel};
 pub use paths::{default_config_path, default_log_path};

@@ -11,7 +11,7 @@ fn completed_base_is_created_when_missing() {
     let completed = root.join("completed_missing");
     assert!(!completed.exists());
 
-    let mut cfg = Config::new(&download, &completed, std::time::Duration::from_secs(60));
+    let mut cfg = Config::new(&download, &completed);
     validate_and_normalize(&mut cfg).expect("validation succeeds creating completed_base");
     assert!(completed.exists(), "completed_base should be created");
 }
@@ -22,7 +22,7 @@ fn download_and_completed_created_when_missing() {
     let root = dunce::canonicalize(td.path()).unwrap();
     let download = root.join("incoming_missing");
     let completed = root.join("completed_missing");
-    let mut cfg = Config::new(&download, &completed, std::time::Duration::from_secs(60));
+    let mut cfg = Config::new(&download, &completed);
     validate_and_normalize(&mut cfg).expect("validation succeeds creating both bases");
     assert!(download.exists(), "download_base should be created");
     assert!(completed.exists(), "completed_base should be created");
@@ -34,7 +34,7 @@ fn disallow_equal_paths() {
     let root = dunce::canonicalize(td.path()).unwrap();
     let base = root.join("same");
     fs::create_dir_all(&base).unwrap();
-    let mut cfg = Config::new(&base, &base, std::time::Duration::from_secs(60));
+    let mut cfg = Config::new(&base, &base);
     let err = validate_and_normalize(&mut cfg).unwrap_err();
     assert!(format!("{err}").contains("resolve to the same"));
 }
@@ -47,7 +47,7 @@ fn disallow_nested_download_inside_completed() {
     fs::create_dir_all(&completed).unwrap();
     let download = completed.join("incoming");
     fs::create_dir_all(&download).unwrap();
-    let mut cfg = Config::new(&download, &completed, std::time::Duration::from_secs(60));
+    let mut cfg = Config::new(&download, &completed);
     let err = validate_and_normalize(&mut cfg).unwrap_err();
     assert!(format!("{err}").contains("must not be inside completed_base"));
 }
@@ -60,7 +60,7 @@ fn disallow_nested_completed_inside_download() {
     fs::create_dir_all(&download).unwrap();
     let completed = download.join("completed");
     fs::create_dir_all(&completed).unwrap();
-    let mut cfg = Config::new(&download, &completed, std::time::Duration::from_secs(60));
+    let mut cfg = Config::new(&download, &completed);
     let err = validate_and_normalize(&mut cfg).unwrap_err();
     assert!(format!("{err}").contains("must not be inside download_base"));
 }
@@ -81,7 +81,7 @@ fn reject_symlink_ancestor() {
     let completed = real.join("completed");
     fs::create_dir_all(&completed).unwrap();
     // point cfg at paths through the symlink
-    let mut cfg = Config::new(link.join("incoming"), link.join("completed"), std::time::Duration::from_secs(60));
+    let mut cfg = Config::new(link.join("incoming"), link.join("completed"));
     let res = validate_and_normalize(&mut cfg);
     assert!(res.is_err(), "expected rejection when a symlink is in an ancestor path");
 }

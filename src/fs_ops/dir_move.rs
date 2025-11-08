@@ -10,7 +10,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use rayon::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use walkdir::WalkDir;
 
 use crate::config::types::Config;
@@ -75,7 +75,7 @@ pub fn move_dir(config: &Config, src_dir: &Path) -> Result<PathBuf> {
     if !force_copy && !cross_device {
         match fs::rename(src_dir, &target) {
             Ok(()) => {
-                info!(src = %src_dir.display(), dest = %target.display(), "Renamed directory atomically");
+                debug!(src = %src_dir.display(), dest = %target.display(), "Renamed directory atomically");
                 // Best-effort fsync of destination parent (and source parent if different) on Unix.
                 #[cfg(unix)]
                 {

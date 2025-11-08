@@ -1,7 +1,6 @@
 //! Verify XML config is parsed and used without touching user state.
 
 use std::fs;
-use std::time::Duration;
 use tempfile::tempdir;
 
 use aria_move::{load_config_from_xml_path, LogLevel};
@@ -39,6 +38,5 @@ fn reads_config_xml_and_applies_values() {
     assert_eq!(cfg.log_file.as_deref(), Some(log_file.as_path()), "log_file mismatch");
     assert_eq!(cfg.log_level, LogLevel::Normal, "log_level mismatch");
     assert!(cfg.preserve_metadata, "preserve_metadata should be true");
-  // recent_window is not set via XML; it should remain the runtime default
-  assert_eq!(cfg.recent_window, Duration::from_secs(300), "recent_window should be default");
+  // auto-pick window removed; no assertion for recency.
 }

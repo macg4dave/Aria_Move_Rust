@@ -11,8 +11,7 @@ fn config_defaults_are_sane() {
     assert!(!cfg.dry_run, "dry_run should default to false");
     assert!(!cfg.preserve_metadata, "preserve_metadata should default to false");
 
-    // Default recent window: 300s
-    assert_eq!(cfg.recent_window.as_secs(), 300);
+    // Auto-pick window removed; explicit source required. (No assertion here.)
 
     // Default log_file should exist as a path value (we don't assert existence)
     let lf = cfg.log_file.as_ref().expect("default log_file should be Some");

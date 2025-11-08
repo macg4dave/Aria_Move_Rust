@@ -254,8 +254,6 @@ fn xml_to_config(parsed: XmlConfig) -> Config {
     } else {
         parsed.preserve_permissions.unwrap_or(false)
     };
-    let recent_window = default_cfg.recent_window;
-
     Config {
         download_base,
         completed_base,
@@ -264,7 +262,6 @@ fn xml_to_config(parsed: XmlConfig) -> Config {
         dry_run: false,
         preserve_metadata,
         preserve_permissions,
-        recent_window,
     }
 }
 

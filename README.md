@@ -470,10 +470,7 @@ When integrating with aria2, these are typically passed by the download-complete
 ### Examples
 
 ```bash
-# Auto-resolve most recent file
-aria_move
-
-# Move a specific path (typical aria2 hook)
+# Move a specific path (typical aria2 hook) - always provide the explicit path
 aria_move 7b3f1234 1 /path/to/incoming/file.iso
 
 # Override bases
@@ -635,7 +632,7 @@ aria_move -d
 | Symlink ancestor defense (log path)   | ✅    | ✅    | ❌      |
 | O_NOFOLLOW log open                   | ✅    | ✅    | ❌      |
 | Structured logging (JSON)             | ✅    | ✅    | ✅      |
-| Auto-resolution recent window (code)  | ✅    | ✅    | ✅      |
+| Auto-resolution (newest file)         | ❌    | ❌    | ❌      |
 
 ---
 

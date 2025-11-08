@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::Path;
 
 use aria_move::Config;
-use filetime::{set_file_mtime, FileTime};
+use filetime::{set_file_mtime, FileTime}; // both used; keep
 use tempfile::tempdir;
 
 /// Create a file with the given content and fsync it (reduces test flakiness).

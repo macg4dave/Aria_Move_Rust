@@ -1,16 +1,13 @@
 use std::fs;
-use std::time::{Duration, SystemTime};
+use std::path::Path;
+// use std::time::Duration;
 use tempfile::tempdir;
 
-use aria_move::{Config};
+use aria_move::Config;
 use aria_move::fs_ops::resolve_source_path;
 
 fn cfg_with(download: &std::path::Path) -> Config {
-    Config {
-        download_base: download.to_path_buf(),
-        recent_window: Duration::from_secs(300),
-        ..Config::default()
-    }
+    Config { download_base: download.to_path_buf(), ..Config::default() }
 }
 
 #[test]
@@ -35,59 +32,28 @@ fn provided_path_dir_rejected() {
 }
 
 #[test]
-fn picks_newest_within_window() {
+fn error_when_no_explicit_path_provided() {
     let td = tempdir().unwrap();
     let d = td.path().join("base");
     fs::create_dir_all(&d).unwrap();
-    let old = d.join("old.txt");
-    let new = d.join("new.txt");
-    fs::write(&old, b"a").unwrap();
-    fs::write(&new, b"b").unwrap();
-    // Make old older
-    let past = SystemTime::now() - Duration::from_secs(3600);
-    filetime::set_file_mtime(&old, filetime::FileTime::from_system_time(past)).unwrap();
-
-    let cfg = Config { download_base: d.clone(), recent_window: Duration::from_secs(60 * 5), ..Config::default() };
-
-    let got = resolve_source_path(&cfg, None).unwrap();
-    assert_eq!(got, new);
-}
-
-#[test]
-fn returns_error_when_none_recent() {
-    let td = tempdir().unwrap();
-    let d = td.path().join("base");
-    fs::create_dir_all(&d).unwrap();
-    let a = d.join("a.txt");
-    let b = d.join("b.txt");
-    fs::write(&a, b"a").unwrap();
-    fs::write(&b, b"b").unwrap();
-    // both very old
-    let past = SystemTime::now() - Duration::from_secs(86_400*10);
-    let ft = filetime::FileTime::from_system_time(past);
-    filetime::set_file_mtime(&a, ft).unwrap();
-    filetime::set_file_mtime(&b, ft).unwrap();
-
-    let cfg = Config { download_base: d.clone(), recent_window: Duration::from_secs(1), ..Config::default() }; // strict recent -> none recent
-
-    // Should now fail instead of falling back
+    let cfg = Config { download_base: d.clone(), ..Config::default() };
     let err = resolve_source_path(&cfg, None).unwrap_err();
     let s = format!("{err}");
     assert!(s.contains("No file found under base"));
 }
 
 #[test]
-fn ignores_deny_suffixes() {
+fn bare_filename_falls_back_to_download_base() {
     let td = tempdir().unwrap();
-    let d = td.path().join("base");
-    fs::create_dir_all(&d).unwrap();
-    let tmp = d.join("file.tmp");
-    let real = d.join("real.bin");
-    fs::write(&tmp, b"x").unwrap();
-    fs::write(&real, b"y").unwrap();
+    let base = td.path().join("base");
+    fs::create_dir_all(&base).unwrap();
+    let cfg = Config { download_base: base.clone(), ..Config::default() };
 
-    let cfg = Config { download_base: d.clone(), recent_window: Duration::from_secs(3600), ..Config::default() };
+    // Create file under base, but provide only the filename
+    let fname = "onlyname.txt";
+    let full = base.join(fname);
+    fs::write(&full, b"x").unwrap();
 
-    let got = resolve_source_path(&cfg, None).unwrap();
-    assert_eq!(got, real);
+    let got = resolve_source_path(&cfg, Some(Path::new(fname))).unwrap();
+    assert_eq!(got, full);
 }

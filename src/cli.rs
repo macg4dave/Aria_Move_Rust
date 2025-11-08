@@ -101,34 +101,40 @@ impl Args {
     /// Precedence:
     /// 1) `--source-path` if provided
     /// 2) positional `SOURCE_PATH` if provided
-    /// 3) single positional first-argument (task_id) when the user invoked
-    ///    `aria_move <filename>` (back-compat / convenience)
+    /// 3) single positional first-argument (task_id) is treated as the path when
+    ///    the user invoked `aria_move <path>` (convenience). This is unconditional
+    ///    when `num_files` and `SOURCE_PATH` are absent.
     pub fn resolved_source(&self) -> Option<std::path::PathBuf> {
-        if let Some(p) = &self.source_path {
-            return Some(p.clone());
-        }
-        if let Some(p) = &self.source_path_pos {
-            return Some(p.clone());
-        }
+        if let Some(p) = &self.source_path { return Some(Self::sanitize_path(p)); }
+        if let Some(p) = &self.source_path_pos { return Some(Self::sanitize_path(p)); }
 
-        // Stricter fallback: only treat `task_id` as a path when the user did
-        // not provide `num_files` (i.e. they didn't invoke the aria2-style
-        // three-argument form) and the `task_id` string looks like a path.
-        // "Looks like a path" is a lightweight heuristic: contains a path
-        // separator or a dot (e.g. "file.iso") or a drive-colon on Windows
-        // (e.g. "C:\\file"). This avoids misinterpreting aria2 task IDs
-        // (hash-like strings) as file paths.
-        if self.num_files.is_none() && let Some(t) = &self.task_id && Self::looks_like_path(t) {
-            return Some(std::path::PathBuf::from(t));
+        // One-arg convenience: treat first positional as the path when the
+        // aria2 three-argument form is not used and no SOURCE_PATH positional
+        // was provided. We intentionally do NOT try to be clever here: any
+        // single positional is interpreted as a path, and resolution will
+        // fail later if it doesn't exist.
+        if self.num_files.is_none() && self.source_path_pos.is_none() {
+            if let Some(t) = &self.task_id { return Some(Self::sanitize_str(t)); }
         }
 
         None
     }
 
+    // Removed heuristic helper; we accept single positional as path unconditionally.
     #[inline]
-    fn looks_like_path(s: &str) -> bool {
-        // Heuristic kept minimal: path separators, extension-like dot, drive-colon, or leading dot.
-        s.contains('/') || s.contains('\\') || s.contains('.') || s.contains(':') || s.starts_with('.')
+    fn sanitize_path(p: &PathBuf) -> PathBuf { Self::sanitize_str(&p.to_string_lossy()) }
+
+    #[inline]
+    fn sanitize_str(s: &str) -> PathBuf {
+        // Trim surrounding single/double quotes if user invoked with quotes in PowerShell or CMD.
+        // Also trim any trailing unmatched quote caused by shell escaping mistakes.
+        let trimmed = s.trim();
+        let without_outer = if (trimmed.starts_with('\"') && trimmed.ends_with('\"')) || (trimmed.starts_with('\'') && trimmed.ends_with('\'')) {
+            &trimmed[1..trimmed.len()-1]
+        } else {
+            trimmed.trim_matches(|c| c=='\'' || c=='\"')
+        };
+        PathBuf::from(without_outer)
     }
 
     /// Effective log level derived from flags.
