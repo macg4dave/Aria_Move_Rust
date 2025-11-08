@@ -55,7 +55,7 @@ fn picks_newest_within_window() {
 }
 
 #[test]
-fn fallback_to_newest_when_none_recent() {
+fn returns_error_when_none_recent() {
     let td = tempdir().unwrap();
     let d = td.path().join("base");
     fs::create_dir_all(&d).unwrap();
@@ -73,9 +73,10 @@ fn fallback_to_newest_when_none_recent() {
     cfg.download_base = d.clone();
     cfg.recent_window = Duration::from_secs(1); // strict recent -> none recent
 
-    // Should still return a deterministic pick (lexicographically first)
-    let got = resolve_source_path(&cfg, None).unwrap();
-    assert_eq!(got, a);
+    // Should now fail instead of falling back
+    let err = resolve_source_path(&cfg, None).unwrap_err();
+    let s = format!("{err}");
+    assert!(s.contains("No file found under base"));
 }
 
 #[test]

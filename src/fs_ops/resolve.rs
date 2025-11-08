@@ -1,17 +1,22 @@
 //! Resolving the source path.
-//! - If the caller provides a concrete path, use it if it exists.
-//! - Otherwise, scan download_base (up to a shallow depth) and pick the most
-//!   recently modified regular file within the configured recent_window.
+//! - If the caller provides a concrete path, use it if it exists and is a regular file (or symlink to one).
+//! - Otherwise, scan `download_base` (up to a shallow depth) and pick the most
+//!   recently modified regular file subject to the configured `recent_window`.
+//!
+//! Strict semantics: if `recent_window > 0` and no file is modified within that window, resolution fails
+//! with `AriaMoveError::NoneFound` (the previous implicit fallback that selected the overall newest file
+//! has been removed for determinism and explicitness). If `recent_window == 0`, the window is treated as
+//! "unbounded" and any file may be selected.
 //!
 //! Notes:
-//! - Uses a single-pass walk (no Vec allocation or re-statting) for efficiency.
+//! - Single-pass walk (no intermediate Vec) for efficiency.
 //! - Re-validates the chosen path before returning to avoid TOCTOU surprises.
 
 use anyhow::Result;
 use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, Instant};
-use tracing::{debug, info, warn, trace, instrument};
+use tracing::{debug, warn, trace, instrument};
 use walkdir::WalkDir;
 
 use crate::config::types::Config;
@@ -75,8 +80,7 @@ pub fn resolve_source_path(config: &Config, maybe_path: Option<&Path>) -> Result
     let mut scanned = 0usize;
     let mut errors = 0usize;
     let mut denied = 0usize;
-    let mut newest_recent: Option<(SystemTime, PathBuf)> = None;
-    let mut newest_overall: Option<(SystemTime, PathBuf)> = None;
+    let mut newest: Option<(SystemTime, PathBuf)> = None;
 
     let walker = WalkDir::new(&config.download_base)
         .follow_links(false)
@@ -100,11 +104,9 @@ pub fn resolve_source_path(config: &Config, maybe_path: Option<&Path>) -> Result
                         if meta.len() == 0 { /* optionally skip zero-length */ }
                         match meta.modified() {
                             Ok(modified) => {
-                                // Track newest overall
-                                update_newest(&mut newest_overall, modified, path.to_path_buf());
-                                // Track newest within cutoff if strict_recent
-                                if modified >= cutoff {
-                                    update_newest(&mut newest_recent, modified, path.to_path_buf());
+                                // Track depending on strictness
+                                if !strict_recent || modified >= cutoff {
+                                    update_newest(&mut newest, modified, path.to_path_buf());
                                 }
                             }
                             Err(_) => { errors += 1; }
@@ -132,15 +134,13 @@ pub fn resolve_source_path(config: &Config, maybe_path: Option<&Path>) -> Result
     }
 
     // 3) Return the newest candidate if still present.
-    let chosen = newest_recent.or(newest_overall);
-    if let Some((_, path)) = chosen {
+    if let Some((_, path)) = newest {
         if path.try_exists().unwrap_or(false) {
             // Re-validate still a regular file
             if let Ok(m) = std::fs::metadata(&path) {
                 if m.is_file() {
                     let elapsed = started.elapsed();
-                    debug!(scanned, errors, denied, millis = elapsed.as_millis() as u64, "auto-selected most recent");
-                    info!("Auto-selected most recent: {}", path.display());
+                    debug!(scanned, errors, denied, millis = elapsed.as_millis() as u64, chosen=%path.display(), "resolution success");
                     return Ok(path);
                 }
             }

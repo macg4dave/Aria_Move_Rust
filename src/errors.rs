@@ -37,9 +37,7 @@ pub enum AriaMoveError {
     /// Provided path existed initially but disappeared before use.
     #[error("Resolved file disappeared: {0}")]
     Disappeared(PathBuf),
-    /// Automatic resolution found no candidate within the recency window.
-    // Removed: RecentNotFound (fallback selects overall newest when none recent)
-    /// Automatic resolution fell back (when allowed) and still found nothing at all.
+    /// Automatic resolution found no candidate (respecting recent_window semantics).
     #[error("No file found under base: {0}")]
     NoneFound(PathBuf),
     /// Download base missing or not a directory.

@@ -126,7 +126,17 @@ pub fn run(args: Args) -> Result<()> {
         // Ensure required directories exist and canonicalize paths
         validate_and_normalize(&mut cfg)?;
         let maybe_src_owned = args.resolved_source();
-        let src = match resolve_source_path(&cfg, maybe_src_owned.as_deref()) {
+        // If user explicitly provided a directory, accept it directly (bypass file-only resolver)
+        let src_result: Result<std::path::PathBuf> = if let Some(p) = maybe_src_owned.as_deref() {
+            match std::fs::symlink_metadata(p) {
+                Ok(meta) if meta.file_type().is_dir() => Ok(p.to_path_buf()),
+                _ => resolve_source_path(&cfg, Some(p)),
+            }
+        } else {
+            resolve_source_path(&cfg, None)
+        };
+
+        let src = match src_result {
             Ok(p) => p,
             Err(e) => {
                 if let Some(am) = e.downcast_ref::<AriaMoveError>() {
