@@ -9,6 +9,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use super::lock::acquire_dir_lock; // Better option: reuse existing directory advisory lock
+
 /// Atomically rename `src` to a unique hidden "claimed" name in the same directory.
 /// Returns the claimed path on success.
 /// Notes:
@@ -26,6 +28,13 @@ pub(super) fn claim_source(src: &Path) -> io::Result<PathBuf> {
     let parent = src.parent().unwrap_or_else(|| Path::new("."));
     let _fname = src.file_name().unwrap_or_else(|| OsStr::new("file"));
 
+    // Acquire an advisory directory lock to ensure serialization of claims within this
+    // directory. This is the "better option" replacing a bespoke sidecar lock file.
+    // The advisory lock unifies concurrency control with other fs_ops ensuring consistent
+    // behavior across platforms (flock on Unix, exclusive CreateFileW on Windows).
+    // If locking the parent directory fails, propagate error.
+    let _dir_lock = acquire_dir_lock(parent)?;
+
     // Try a few times in the astronomically unlikely event of a collision.
     const MAX_TRIES: u32 = 5;
     for attempt in 0..=MAX_TRIES {
@@ -37,7 +46,9 @@ pub(super) fn claim_source(src: &Path) -> io::Result<PathBuf> {
         let claimed = parent.join(new_name);
 
         match fs::rename(src, &claimed) {
-            Ok(()) => return Ok(claimed),
+            Ok(()) => {
+                return Ok(claimed);
+            },
             Err(e) => {
                 // If the source vanished, propagate NotFound (caller treats as race lost).
                 if e.kind() == io::ErrorKind::NotFound {
@@ -59,8 +70,7 @@ pub(super) fn claim_source(src: &Path) -> io::Result<PathBuf> {
         pid, base_nanos
     ));
     let final_claimed = parent.join(final_name);
-    fs::rename(src, &final_claimed)?;
-    Ok(final_claimed)
+    fs::rename(src, &final_claimed).map(|_| final_claimed)
 }
 
 #[cfg(test)]

@@ -1,4 +1,7 @@
-use std::fs; use tempfile::tempdir; use aria_move::fs_ops::safe_copy_and_rename_with_metadata; use std::os::unix::fs::PermissionsExt;
+use std::fs; use tempfile::tempdir; use aria_move::fs_ops::safe_copy_and_rename_with_metadata;
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 #[cfg(unix)]
 #[test]
