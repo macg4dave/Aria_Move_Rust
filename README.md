@@ -158,26 +158,23 @@ Ensure your wrapper exists and is executable at `/usr/local/bin/aria_move_hook.s
 
 ```ini
 [Unit]
-Description=aria2c download service
-After=network-online.target
-Wants=network-online.target
+Description=Aria2c download manager
+Requires=network.target
+After=dhcpcd.service
 
 [Service]
 Type=simple
 User=aria2
 Group=aria2
-WorkingDirectory=/var/lib/aria2
-Environment=PATH=/usr/local/bin:/usr/bin
-ExecStart=/usr/bin/aria2c --conf-path=/etc/aria2/aria2.conf
+RemainAfterExit=yes
+ExecStart=/usr/bin/aria2c --console-log-level=warn --rpc-listen-all --conf-path=/etc/aria2/aria.conf
+ExecReload=/usr/bin/kill -HUP $MAINPID
+RestartSec=1min
 Restart=on-failure
-RestartSec=3
-LimitNOFILE=65536
-
-# Allow writing to these paths if using systemd system restrictions
-ReadWritePaths=/data/incoming /data/completed /var/lib/aria2 /var/log/aria2
 
 [Install]
 WantedBy=multi-user.target
+
 ```
 
 Create the `aria2` user/group and set ownership:
