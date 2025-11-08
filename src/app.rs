@@ -54,7 +54,7 @@ pub fn run(args: Args) -> Result<()> {
     let mut cfg = Config::default();
 
     // Prefer config file values unless CLI overrides them.
-    if let Some((db, cb, lvl, lf, recent_window, preserve_metadata, preserve_permissions)) = load_config_from_xml() {
+    if let Some((db, cb, lvl, lf, preserve_metadata, preserve_permissions)) = load_config_from_xml() {
         if args.download_base.is_none() {
             cfg.download_base = db;
         }
@@ -65,7 +65,6 @@ pub fn run(args: Args) -> Result<()> {
         if cfg.log_file.is_none() {
             cfg.log_file = lf;
         }
-        cfg.recent_window = recent_window;
         cfg.preserve_metadata = preserve_metadata;
         // Only set permissions flag if full metadata not requested (XML semantics mirror CLI precedence)
         if !cfg.preserve_metadata {

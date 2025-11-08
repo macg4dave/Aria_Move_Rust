@@ -165,6 +165,7 @@ mod tests {
     use tempfile::tempdir;
     use std::io::Write;
     use std::thread;
+    use serial_test::serial;
 
     #[test]
     fn unique_destination_same_when_absent() {
@@ -197,6 +198,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn stable_file_probe_ok_when_quiescent() {
         shutdown::reset();
         let td = tempdir().unwrap();

@@ -27,7 +27,6 @@ fn aria2_positional_input_accepted_and_parsed() {
   <completed_base>{}</completed_base>
   <log_level>normal</log_level>
   <preserve_metadata>false</preserve_metadata>
-  <recent_window_seconds>60</recent_window_seconds>
 </config>"#,
         download_base.display(),
         completed_base.display()

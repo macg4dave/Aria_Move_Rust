@@ -20,7 +20,6 @@ fn log_colocates_with_env_override_config() {
   <completed_base>{}</completed_base>
   <log_level>normal</log_level>
   <preserve_metadata>false</preserve_metadata>
-  <recent_window_seconds>60</recent_window_seconds>
 </config>"#, download_base.display(), completed_base.display());
     fs::write(&cfg, xml).unwrap();
 

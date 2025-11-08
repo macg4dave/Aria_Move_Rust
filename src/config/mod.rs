@@ -101,7 +101,7 @@ fn write_template(path: &Path) -> io::Result<()> {
         completed_base         -> directory where completed items are moved
         log_level              -> quiet | normal | info | debug
         log_file               -> path to log file (optional; stdout/stderr still used)
-        recent_window_seconds  -> consider files modified within this window for auto-resolution (0 = all)
+    recent_window_seconds  -> (removed) automatic recency window no longer configurable via XML
 
     Notes:
         - CLI flags override XML values.
@@ -118,7 +118,6 @@ fn write_template(path: &Path) -> io::Result<()> {
 
     <preserve_metadata>false</preserve_metadata>
     <preserve_permissions>false</preserve_permissions>
-    <recent_window_seconds>300</recent_window_seconds>
 </config>
 "#;
 

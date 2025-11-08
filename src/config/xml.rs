@@ -13,7 +13,7 @@ use serde::Deserialize;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+// duration no longer parsed from XML; keep runtime default in Config
 use tracing::{debug, info};
 
 use super::paths::{default_config_path, default_log_path, path_has_symlink_ancestor};
@@ -39,9 +39,6 @@ struct XmlConfig {
     preserve_metadata: Option<bool>,
     #[serde(rename = "preserve_permissions")]
     preserve_permissions: Option<bool>,
-    /// Optional override of recent_window in seconds
-    #[serde(rename = "recent_window_seconds", default, deserialize_with = "de_u64_trimmed_opt")]
-    recent_window_seconds: Option<u64>,
 }
 
 // Reduce visual complexity of the return type used by load_config_from_xml().
@@ -50,22 +47,10 @@ type LoadedConfig = (
     PathBuf,          // completed_base
     Option<LogLevel>, // log_level
     Option<PathBuf>,  // log_file
-    Duration,         // recent_window
     bool,             // preserve_metadata
     bool,             // preserve_permissions
 );
 
-const DEFAULT_RECENT_SECS: u64 = 300;
-
-// Custom deserializer that trims surrounding whitespace for optional u64
-fn de_u64_trimmed_opt<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::Deserialize;
-    let opt: Option<String> = Option::deserialize(deserializer)?;
-    Ok(opt.and_then(|s| s.trim().parse::<u64>().ok()))
-}
 
 /// Read config from XML. OS-aware default path used if ARIA_MOVE_CONFIG not set.
 /// Returns None if no meaningful settings are present or the file doesn’t exist.
@@ -128,10 +113,6 @@ pub fn load_config_from_xml() -> Option<LoadedConfig> {
             let trimmed = s.trim();
             if trimmed.is_empty() { None } else { Some(PathBuf::from(trimmed)) }
         });
-    let recent_window = parsed
-        .recent_window_seconds
-        .map(Duration::from_secs)
-        .unwrap_or(Duration::from_secs(DEFAULT_RECENT_SECS));
     let preserve_metadata = parsed.preserve_metadata.unwrap_or(false);
     let preserve_permissions = parsed.preserve_permissions.unwrap_or(false);
 
@@ -150,7 +131,6 @@ pub fn load_config_from_xml() -> Option<LoadedConfig> {
         log_level,
         // best-effort default log path if not set
         log_file.or_else(|| default_log_path().ok()),
-        recent_window,
         preserve_metadata,
         preserve_permissions,
     ))
@@ -175,13 +155,32 @@ pub fn create_template_config(path: &Path) -> Result<()> {
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| "/path/to/aria_move.log".into());
 
-    let content = format!(
-        "<!--\n  aria_move configuration (XML)\n\n  Boolean flags (true/false):\n    preserve_metadata      -> copy permissions + timestamps (+ xattrs when feature enabled)\n    preserve_permissions   -> copy only permissions (mode on Unix, readonly on Windows)\n\n  Other fields:\n    download_base          -> directory where new/partial downloads appear\n    completed_base         -> directory where completed items are moved\n    log_level              -> quiet | normal | info | debug\n    log_file               -> path to log file (optional; stdout/stderr still used)\n    recent_window_seconds  -> consider files modified within this window for auto-resolution (0 = all)\n\n  Notes:\n    - CLI flags override XML values.\n    - Setting preserve_metadata implies permissions; preserve_permissions is ignored if preserve_metadata=true.\n-->\n<config>\n  <download_base>{}</download_base>\n  <completed_base>{}</completed_base>\n  <log_level>normal</log_level>\n  <log_file>{}</log_file>\n  <preserve_metadata>false</preserve_metadata>\n  <preserve_permissions>false</preserve_permissions>\n  <recent_window_seconds>{}</recent_window_seconds>\n</config>\n",
-        DOWNLOAD_BASE_DEFAULT,
-        COMPLETED_BASE_DEFAULT,
-        suggested_log,
-        DEFAULT_RECENT_SECS
-    );
+        let content = format!(r#"<!--
+    aria_move configuration (XML)
+
+    Boolean flags (true/false):
+        preserve_metadata      -> copy permissions + timestamps (+ xattrs when feature enabled)
+        preserve_permissions   -> copy only permissions (mode on Unix, readonly on Windows)
+
+    Other fields:
+        download_base          -> directory where new/partial downloads appear
+        completed_base         -> directory where completed items are moved
+        log_level              -> quiet | normal | info | debug
+        log_file               -> path to log file (optional; stdout/stderr still used)
+
+    Notes:
+        - CLI flags override XML values.
+        - Setting preserve_metadata implies permissions; preserve_permissions is ignored if preserve_metadata=true.
+-->
+<config>
+    <download_base>{}</download_base>
+    <completed_base>{}</completed_base>
+    <log_level>normal</log_level>
+    <log_file>{}</log_file>
+    <preserve_metadata>false</preserve_metadata>
+    <preserve_permissions>false</preserve_permissions>
+</config>
+"#, DOWNLOAD_BASE_DEFAULT, COMPLETED_BASE_DEFAULT, suggested_log);
 
     // Atomic, secure write (O_NOFOLLOW + create_new on Unix), then tighten perms.
     write_config_secure_new_0600(path, content.as_bytes())?;
@@ -255,8 +254,7 @@ fn xml_to_config(parsed: XmlConfig) -> Config {
     } else {
         parsed.preserve_permissions.unwrap_or(false)
     };
-    let recent_window =
-        Duration::from_secs(parsed.recent_window_seconds.unwrap_or(DEFAULT_RECENT_SECS));
+    let recent_window = default_cfg.recent_window;
 
     Config {
         download_base,

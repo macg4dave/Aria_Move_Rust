@@ -104,11 +104,12 @@ pub fn acquire_dir_lock(dir: &Path) -> io::Result<DirLock> {
 
     #[cfg(windows)]
     {
-        use std::ffi::OsStr;
-        use std::iter::once;
-        use std::os::windows::ffi::OsStrExt;
-        use std::thread::sleep;
-        use std::time::Duration;
+    use std::ffi::OsStr;
+    use std::iter::once;
+    use std::os::windows::ffi::OsStrExt;
+    use std::thread::sleep;
+    use std::time::Duration;
+    use windows_sys::Win32::Storage::FileSystem::SetFileAttributesW;
 
         // Convert Path -> wide string (null-terminated)
         let wide: Vec<u16> = lock_path
@@ -132,6 +133,8 @@ pub fn acquire_dir_lock(dir: &Path) -> io::Result<DirLock> {
             };
 
             if handle as isize != -1 {
+                // Ensure the on-disk lock file is hidden so casual dir listings don't show it.
+                let _ = unsafe { SetFileAttributesW(wide.as_ptr(), FILE_ATTRIBUTE_NORMAL | 0x2) };
                 let waited = start.elapsed();
                 trace!(path = %lock_path.display(), attempts = attempts, waited_ms = waited.as_millis() as u64, "lock acquired");
                 return Ok(DirLock { handle: handle as isize, _path: lock_path.clone() });
@@ -211,6 +214,8 @@ pub fn try_acquire_dir_lock(dir: &Path) -> io::Result<Option<DirLock>> {
             )
         };
         if handle as isize != -1 {
+            // Mark the lock file hidden to avoid cluttering directories.
+            let _ = unsafe { SetFileAttributesW(wide.as_ptr(), FILE_ATTRIBUTE_NORMAL | 0x2) };
             trace!(path = %lock_path.display(), waited_ms = start.elapsed().as_millis() as u64, "try-lock success");
             return Ok(Some(DirLock { handle: handle as isize, _path: lock_path }));
         }

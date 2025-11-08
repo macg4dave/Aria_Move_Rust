@@ -93,8 +93,7 @@ Minimal XML template (with comments):
   <log_file>/path/to/aria_move.log</log_file>
   <!-- Preserve permissions and mtime when moving (slower) -->
   <preserve_metadata>false</preserve_metadata>
-  <!-- Recency window (seconds) for auto-resolving recent file -->
-  <recent_window_seconds>300</recent_window_seconds>
+    <!-- Recency window removed from XML; configure recency via runtime defaults or CLI -->
 </config>
 ```
 

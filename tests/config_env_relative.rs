@@ -21,12 +21,11 @@ fn relative_env_config_path_resolved() {
     fs::create_dir_all(&completed_base).unwrap();
 
     let cfg_full = base.join(rel_cfg);
-    let xml = format!(r#"<config>
-  <download_base>{}</download_base>
-  <completed_base>{}</completed_base>
-  <log_level>normal</log_level>
-  <preserve_metadata>false</preserve_metadata>
-  <recent_window_seconds>60</recent_window_seconds>
+        let xml = format!(r#"<config>
+    <download_base>{}</download_base>
+    <completed_base>{}</completed_base>
+    <log_level>normal</log_level>
+    <preserve_metadata>false</preserve_metadata>
 </config>"#, download_base.display(), completed_base.display());
     fs::write(&cfg_full, xml).unwrap();
 

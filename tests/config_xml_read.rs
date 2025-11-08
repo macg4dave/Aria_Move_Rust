@@ -23,7 +23,6 @@ fn reads_config_xml_and_applies_values() {
   <log_level>normal</log_level>
   <log_file>{}</log_file>
   <preserve_metadata>true</preserve_metadata>
-  <recent_window_seconds>600</recent_window_seconds>
 </config>
 "#,
         download_base.display(),
@@ -40,5 +39,6 @@ fn reads_config_xml_and_applies_values() {
     assert_eq!(cfg.log_file.as_deref(), Some(log_file.as_path()), "log_file mismatch");
     assert_eq!(cfg.log_level, LogLevel::Normal, "log_level mismatch");
     assert!(cfg.preserve_metadata, "preserve_metadata should be true");
-    assert_eq!(cfg.recent_window, Duration::from_secs(600), "recent_window mismatch");
+  // recent_window is not set via XML; it should remain the runtime default
+  assert_eq!(cfg.recent_window, Duration::from_secs(300), "recent_window should be default");
 }
