@@ -48,6 +48,13 @@ test-helpers = ["tempfile"]
 xattrs = ["dep:xattr"]
 
 [workspace.metadata.dist]
-# Future customization point for cargo-dist (currently minimal defaults)
-# You can add installers or restrict targets later, e.g.:
-# targets = ["x86_64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-pc-windows-msvc"]
+# Configure cargo-dist release targets for common platforms
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+# Enable checksums and a single tar/zip per target (defaults are fine)
+checksum = true

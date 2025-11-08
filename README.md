@@ -1,6 +1,10 @@
 # aria_move (Rust)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](#license) [![Build](https://img.shields.io/badge/build-cargo-blue.svg)](#development) [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-orange.svg)](#usage)
+[![Release](https://img.shields.io/github/v/release/macg4dave/Aria_Move_Rust?display_name=tag&sort=semver)](https://github.com/macg4dave/Aria_Move_Rust/releases)
+[![Downloads](https://img.shields.io/github/downloads/macg4dave/Aria_Move_Rust/total)](https://github.com/macg4dave/Aria_Move_Rust/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](#license)
+[![CI](https://github.com/macg4dave/Aria_Move_Rust/actions/workflows/ci.yml/badge.svg)](https://github.com/macg4dave/Aria_Move_Rust/actions/workflows/ci.yml)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-orange.svg)](#usage)
 
 ---
 
@@ -20,6 +24,7 @@
 - [Links](#links)
 - [License](#license)
 - [Contributing](#contributing)
+- [Releases](#releases)
 
 ---
 
@@ -52,6 +57,32 @@ Designed for ease-of-use and reliability: quick sensible defaults, a tiny XML co
 - Easy to extend: clear fs/ and platform/ boundaries to add features safely
 
 ---
+
+## Releases
+
+This repository automates releases with:
+
+- Release PRs and changelogs powered by release-please
+- Cross-platform binaries built and uploaded by cargo-dist
+
+Typical flow:
+
+1. Merge PRs with Conventional Commit-style titles (e.g., `feat: add resume support`).
+2. A Release PR is opened automatically; review and merge it when ready.
+3. The GitHub Release is created; the Release workflow builds and uploads binaries for Linux, macOS, and Windows.
+
+Manual runs:
+
+- To refresh the Release PR manually, run the “Release Please” workflow from the Actions tab.
+- To build artifacts for an existing tag (re-run), dispatch the “Release Artifacts” workflow and provide the tag.
+
+Local dry-run:
+
+```
+./scripts/release-dry-run.sh
+```
+
+Artifacts will appear in `target/dist` (no upload).
 
 ## Requirements & build tools
 

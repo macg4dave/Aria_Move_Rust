@@ -3,6 +3,12 @@ name: Release Artifacts
 on:
   release:
     types: [created]
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Tag to build (e.g. v0.6.1)"
+        required: false
+        type: string
 
 jobs:
   dist:
@@ -13,18 +19,30 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Install Rust toolchain (stable)
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - name: Install cargo-dist
         run: cargo install cargo-dist --locked
+      - name: Ensure jq is available
+        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Determine tag
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag_name }}" ]; then
+            echo "tag=${{ github.event.inputs.tag_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+          fi
       - name: Plan dist build
-        run: cargo dist plan --tag "${{ github.event.release.tag_name }}" --artifacts=all --output-format=json > dist-plan.json
+        run: cargo dist plan --tag "${{ steps.tag.outputs.tag }}" --artifacts=all --output-format=json > dist-plan.json
       - name: Build artifacts
-        run: cargo dist build --tag "${{ github.event.release.tag_name }}" --artifacts=all
+        run: cargo dist build --tag "${{ steps.tag.outputs.tag }}" --artifacts=all
       - name: Upload artifacts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cargo dist upload --tag "${{ github.event.release.tag_name }}" --artifacts=all --body "$(jq -r '.announcement.body // ""' dist-plan.json)"
+          cargo dist upload --tag "${{ steps.tag.outputs.tag }}" --artifacts=all --body "$(jq -r '.announcement.body // ""' dist-plan.json)"
