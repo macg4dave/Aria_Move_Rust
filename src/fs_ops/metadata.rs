@@ -95,6 +95,28 @@ pub fn preserve_metadata(dest: &Path, src_meta: &fs::Metadata) -> Result<()> {
     Ok(())
 }
 
+/// Preserve only permissions (and readonly bit on Windows) from source metadata to dest.
+pub fn preserve_permissions_only(dest: &Path, src_meta: &fs::Metadata) -> Result<()> {
+    // Unix: set mode bits
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let src_mode = src_meta.permissions().mode() & 0o777;
+        let perms = fs::Permissions::from_mode(src_mode);
+        let _ = fs::set_permissions(dest, perms);
+    }
+    // Windows: mirror readonly attribute
+    #[cfg(windows)]
+    {
+        if let Ok(meta) = fs::metadata(dest) {
+            let mut perms = meta.permissions();
+            perms.set_readonly(src_meta.permissions().readonly());
+            let _ = fs::set_permissions(dest, perms);
+        }
+    }
+    Ok(())
+}
+
 /// Preserve extended attributes (xattrs) from source path to destination path.
 /// - Requires the "xattrs" feature (otherwise this is a no-op Ok(()))
 /// - On unsupported platforms or if listing/setting fails:

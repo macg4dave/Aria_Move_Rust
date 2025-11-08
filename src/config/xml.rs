@@ -37,6 +37,8 @@ struct XmlConfig {
     log_file: Option<String>,
     #[serde(rename = "preserve_metadata")]
     preserve_metadata: Option<bool>,
+    #[serde(rename = "preserve_permissions")]
+    preserve_permissions: Option<bool>,
     /// Optional override of recent_window in seconds
     #[serde(rename = "recent_window_seconds", default, deserialize_with = "de_u64_trimmed_opt")]
     recent_window_seconds: Option<u64>,
@@ -50,6 +52,7 @@ type LoadedConfig = (
     Option<PathBuf>,  // log_file
     Duration,         // recent_window
     bool,             // preserve_metadata
+    bool,             // preserve_permissions
 );
 
 const DEFAULT_RECENT_SECS: u64 = 300;
@@ -130,6 +133,7 @@ pub fn load_config_from_xml() -> Option<LoadedConfig> {
         .map(Duration::from_secs)
         .unwrap_or(Duration::from_secs(DEFAULT_RECENT_SECS));
     let preserve_metadata = parsed.preserve_metadata.unwrap_or(false);
+    let preserve_permissions = parsed.preserve_permissions.unwrap_or(false);
 
     // If no meaningful settings were provided, treat as "no config" so callers can use defaults.
     if download_base.is_none()
@@ -148,6 +152,7 @@ pub fn load_config_from_xml() -> Option<LoadedConfig> {
         log_file.or_else(|| default_log_path().ok()),
         recent_window,
         preserve_metadata,
+        preserve_permissions,
     ))
 }
 
@@ -171,7 +176,7 @@ pub fn create_template_config(path: &Path) -> Result<()> {
         .unwrap_or_else(|_| "/path/to/aria_move.log".into());
 
     let content = format!(
-        "<config>\n  <download_base>{}</download_base>\n  <completed_base>{}</completed_base>\n  <log_level>normal</log_level>\n  <log_file>{}</log_file>\n  <!-- optional: preserve file permissions and mtime when moving (default: false) -->\n  <preserve_metadata>false</preserve_metadata>\n  <!-- optional: override recent window in seconds (default: 300) -->\n  <recent_window_seconds>{}</recent_window_seconds>\n</config>\n",
+        "<!--\n  aria_move configuration (XML)\n\n  Boolean flags (true/false):\n    preserve_metadata      -> copy permissions + timestamps (+ xattrs when feature enabled)\n    preserve_permissions   -> copy only permissions (mode on Unix, readonly on Windows)\n\n  Other fields:\n    download_base          -> directory where new/partial downloads appear\n    completed_base         -> directory where completed items are moved\n    log_level              -> quiet | normal | info | debug\n    log_file               -> path to log file (optional; stdout/stderr still used)\n    recent_window_seconds  -> consider files modified within this window for auto-resolution (0 = all)\n\n  Notes:\n    - CLI flags override XML values.\n    - Setting preserve_metadata implies permissions; preserve_permissions is ignored if preserve_metadata=true.\n-->\n<config>\n  <download_base>{}</download_base>\n  <completed_base>{}</completed_base>\n  <log_level>normal</log_level>\n  <log_file>{}</log_file>\n  <preserve_metadata>false</preserve_metadata>\n  <preserve_permissions>false</preserve_permissions>\n  <recent_window_seconds>{}</recent_window_seconds>\n</config>\n",
         DOWNLOAD_BASE_DEFAULT,
         COMPLETED_BASE_DEFAULT,
         suggested_log,
@@ -253,6 +258,7 @@ fn xml_to_config(parsed: XmlConfig) -> Config {
 
     // Flags
     cfg.preserve_metadata = parsed.preserve_metadata.unwrap_or(false);
+    cfg.preserve_permissions = parsed.preserve_permissions.unwrap_or(false);
     cfg.recent_window =
         Duration::from_secs(parsed.recent_window_seconds.unwrap_or(DEFAULT_RECENT_SECS));
 

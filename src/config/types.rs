@@ -71,6 +71,8 @@ pub struct Config {
     pub dry_run: bool,
     /// If true, preserve permissions and timestamps
     pub preserve_metadata: bool,
+    /// If true, preserve only permissions (mode / readonly). Ignored if preserve_metadata is true.
+    pub preserve_permissions: bool,
     // Single switch: when true, preserve all available metadata (times, perms, readonly, xattrs).
     // When false, preserve nothing.
     /// Recency window for auto-resolving recent files
@@ -87,6 +89,7 @@ impl Default for Config {
             log_file: paths::default_log_path().ok(),
             dry_run: false,
             preserve_metadata: false,
+            preserve_permissions: false,
             
             // Default to 5 minutes of recency
             recent_window: Duration::from_secs(60 * 5),

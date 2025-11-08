@@ -85,7 +85,7 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
     }
 
     // Capture source metadata BEFORE any rename (after rename, src path no longer exists).
-    let meta_before = if config.preserve_metadata {
+    let meta_before = if config.preserve_metadata || config.preserve_permissions {
         Some(fs::metadata(src).with_context(|| format!("stat {}", src.display()))?)
     } else {
         None
@@ -96,8 +96,12 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
         Ok(MoveOutcome::Renamed) => {
             info!(src = %src.display(), dest = %dest.display(), "Renamed file atomically");
             if let Some(meta) = meta_before.as_ref() {
-                let _ = metadata::preserve_metadata(&dest, meta);
-                let _ = metadata::preserve_xattrs(src, &dest);
+                if config.preserve_metadata {
+                    let _ = metadata::preserve_metadata(&dest, meta);
+                    let _ = metadata::preserve_xattrs(src, &dest);
+                } else if config.preserve_permissions {
+                    let _ = metadata::preserve_permissions_only(&dest, meta);
+                }
             }
             return Ok(dest);
         }
@@ -136,6 +140,7 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
         }
         .into());
     }
+    // Copy with or without metadata; permissions-only handled after file is at dest.
     safe_copy_and_rename_with_metadata(src, &dest, config.preserve_metadata)?;
 
     // Remove original after successful copy into place.
@@ -150,6 +155,13 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
     if let Some(src_parent) = src.parent() {
         if let Err(e) = super::util::fsync_dir(src_parent) {
             warn!(error = %e, dir = %src_parent.display(), "best-effort fsync(src_parent after delete) failed");
+        }
+    }
+
+    // If only permissions (not full metadata) requested, apply now at dest
+    if let Some(meta) = meta_before.as_ref() {
+        if !config.preserve_metadata && config.preserve_permissions {
+            let _ = metadata::preserve_permissions_only(&dest, meta);
         }
     }
 

@@ -89,23 +89,36 @@ pub fn path_has_symlink_ancestor(path: &Path) -> io::Result<bool> {
 }
 
 fn write_template(path: &Path) -> io::Result<()> {
-    let template = r#"<!-- aria_move config (XML) -->
-<!-- Edit the paths below and rerun aria_move -->
+        let template = r#"<!--
+    aria_move configuration (XML)
+
+    Boolean flags (true/false):
+        preserve_metadata      -> copy permissions + timestamps (+ xattrs when feature enabled)
+        preserve_permissions   -> copy only permissions (mode on Unix, readonly on Windows)
+
+    Other fields:
+        download_base          -> directory where new/partial downloads appear
+        completed_base         -> directory where completed items are moved
+        log_level              -> quiet | normal | info | debug
+        log_file               -> path to log file (optional; stdout/stderr still used)
+        recent_window_seconds  -> consider files modified within this window for auto-resolution (0 = all)
+
+    Notes:
+        - CLI flags override XML values.
+        - Setting preserve_metadata implies permissions; preserve_permissions is ignored if preserve_metadata=true.
+        - IMPORTANT: The default /path/to/incoming and /path/to/completed are placeholders. Edit them before running.
+            When running as root, aria_move will refuse to create these placeholder paths.
+-->
 <config>
-  <!-- Where partial/new downloads appear -->
-  <download_base>/path/to/incoming</download_base>
-  <!-- Final destination for completed items -->
-  <completed_base>/path/to/completed</completed_base>
+    <download_base>/path/to/incoming</download_base>
+    <completed_base>/path/to/completed</completed_base>
 
-  <!-- quiet | normal | info | debug -->
-  <log_level>normal</log_level>
-  <!-- Optional: full path to log file -->
-  <log_file></log_file>
+    <log_level>normal</log_level>
+    <log_file></log_file>
 
-  <!-- Preserve permissions and mtime when moving (slower) -->
-  <preserve_metadata>false</preserve_metadata>
-  <!-- Recency window (seconds) for auto-resolving recent file) -->
-  <recent_window_seconds>300</recent_window_seconds>
+    <preserve_metadata>false</preserve_metadata>
+    <preserve_permissions>false</preserve_permissions>
+    <recent_window_seconds>300</recent_window_seconds>
 </config>
 "#;
 
@@ -118,6 +131,18 @@ fn write_template(path: &Path) -> io::Result<()> {
 /// Ensure path exists as a directory, reject symlink ancestors (Unix), and enforce safe perms.
 fn ensure_safe_dir(dir: &Path) -> Result<()> {
     if !dir.exists() {
+        // Avoid creating placeholder default paths when user left defaults unchanged and running as root.
+        // The built-in template uses '/path/to/incoming' and '/path/to/completed' as sentinel placeholders.
+        // If those are still present verbatim and we're root, refuse creation to force explicit configuration.
+        #[cfg(unix)]
+        {
+            // Avoid external crate dependency; check effective UID directly.
+            let is_root = unsafe { libc::geteuid() } == 0;
+            let display_str = dir.display().to_string();
+            if is_root && (display_str == "/path/to/incoming" || display_str == "/path/to/completed") {
+                return Err(anyhow!("Refusing to create placeholder default path '{}' as root; edit config.xml to real paths.", display_str));
+            }
+        }
         create_secure_dir_all(dir).with_context(|| format!("create directory '{}'", dir.display()))?;
     } else if !dir.is_dir() {
         return Err(anyhow!("'{}' exists but is not a directory", dir.display()));

@@ -81,6 +81,13 @@ pub struct Args {
     )]
     pub preserve_metadata: bool,
 
+    /// Preserve only permissions (faster than full metadata). Ignored if --preserve-metadata is also set.
+    #[arg(
+        long,
+        help = "Preserve only permissions (mode/readonly); faster than --preserve-metadata"
+    )]
+    pub preserve_permissions: bool,
+
     /// Emit logs in structured JSON (includes timestamp, level, and structured fields).
     #[arg(long, help = "Emit logs in structured JSON")]
     pub json: bool,
@@ -155,6 +162,9 @@ impl Args {
         }
         if self.preserve_metadata {
             cfg.preserve_metadata = true;
+        }
+        if self.preserve_permissions {
+            cfg.preserve_permissions = true;
         }
     }
 }

@@ -171,11 +171,15 @@ pub fn move_dir(config: &Config, src_dir: &Path) -> Result<PathBuf> {
 
         // Copy file data
         fs::copy(path, &dst).map_err(io_error_with_help("copy file to destination", &dst))?;
-        // Metadata preservation; strict failures propagate when enabled
-        if config.preserve_metadata {
+        // Metadata preservation; apply full or permissions-only per flags (best-effort)
+        if config.preserve_metadata || config.preserve_permissions {
             if let Ok(src_meta) = fs::metadata(path) {
-                let _ = super::metadata::preserve_metadata(&dst, &src_meta);
-                let _ = super::metadata::preserve_xattrs(path, &dst);
+                if config.preserve_metadata {
+                    let _ = super::metadata::preserve_metadata(&dst, &src_meta);
+                    let _ = super::metadata::preserve_xattrs(path, &dst);
+                } else {
+                    let _ = super::metadata::preserve_permissions_only(&dst, &src_meta);
+                }
             }
         }
         Ok(())
