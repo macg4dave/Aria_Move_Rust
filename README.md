@@ -117,13 +117,13 @@ If `aria_move` is launched only via a systemd service user (e.g. `aria2`) the au
    ```bash
    sudo mkdir -p /etc/aria_move
    sudo tee /etc/aria_move/config.xml > /dev/null <<'EOF'
-<config>
-  <download_base>/data/incoming</download_base>
-  <completed_base>/data/completed</completed_base>
-  <log_level>normal</log_level>
-  <log_file>/var/log/aria_move/aria_move.log</log_file>
-</config>
-EOF
+   <config>
+   <download_base>/data/incoming</download_base>
+   <completed_base>/data/completed</completed_base>
+   <log_level>normal</log_level>
+   <log_file>/var/log/aria_move/aria_move.log</log_file>
+   </config>
+   EOF
    sudo mkdir -p /var/log/aria_move
    sudo chown -R aria2:aria2 /etc/aria_move /var/log/aria_move /data/incoming /data/completed
    ```
