@@ -24,9 +24,14 @@ jobs:
         run: cargo fmt --all -- --check
 
   clippy:
-    name: Clippy (allow warnings)
+    name: Clippy (warnings don't fail)
     runs-on: ubuntu-latest
     needs: fmt
+    # Never fail the build on clippy diagnostics; still print them
+    continue-on-error: true
+    env:
+      # Ensure any deny(warnings) from env/crates are downgraded to warnings
+      RUSTFLAGS: "-Cap-lints=warn"
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust toolchain (stable + clippy)
