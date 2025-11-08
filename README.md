@@ -54,11 +54,6 @@ aria_move --version
 aria_move --dry-run /path/to/downloads/MyFolder
 
 # Actually move it
-aria_move /path/to/downloads/MyFolder
-
-# Show config location
-aria_move --print-config
-
 # Debug mode
 aria_move --log-level debug /path/to/file.iso
 ```
@@ -93,6 +88,42 @@ Create `C:\Tools\aria_move_hook.bat`:
 ```bat
 @echo off
 "C:\Tools\aria_move.exe" %1 %2 %3
+### Running under systemd (non-interactive first run)
+
+If `aria_move` is launched only via a systemd service user (e.g. `aria2`) the automatic first-run template may not appear because you never invoke the binary interactively as that user. Pre-create a config in a root-managed path and point the wrapper to it.
+
+1. Create config directory and file:
+   ```bash
+   sudo mkdir -p /etc/aria_move
+   sudo tee /etc/aria_move/config.xml > /dev/null <<'EOF'
+<config>
+  <download_base>/data/incoming</download_base>
+  <completed_base>/data/completed</completed_base>
+  <log_level>normal</log_level>
+  <log_file>/var/log/aria_move/aria_move.log</log_file>
+</config>
+EOF
+   sudo mkdir -p /var/log/aria_move
+   sudo chown -R aria2:aria2 /etc/aria_move /var/log/aria_move /data/incoming /data/completed
+   ```
+2. Modify wrapper to export the config path before exec:
+   ```bash
+   # /usr/local/bin/aria_move_hook.sh
+   #!/usr/bin/env bash
+   export ARIA_MOVE_CONFIG=/etc/aria_move/config.xml
+   exec /usr/local/bin/aria_move "$1" "$2" "$3"
+   ```
+3. Ensure `aria2.conf` uses the wrapper:
+   ```ini
+   on-download-complete=/usr/local/bin/aria_move_hook.sh
+   ```
+4. Validate as service user:
+   ```bash
+   sudo -u aria2 ARIA_MOVE_CONFIG=/etc/aria_move/config.xml /usr/local/bin/aria_move --print-config
+   ```
+
+There is no CLI flag for a config path; the environment variable is the supported override. The service user must have read access to the config and write access (if logging to file). If unreadable, defaults are used and moves may be refused due to missing base directories.
+
 ```
 
 Add to `aria2.conf`:
