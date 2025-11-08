@@ -54,10 +54,8 @@ fn cleanup_partial_dirs(download_base: &Path, completed_base: &Path) -> Result<(
             continue;
         }
         // Skip hidden internal dirs.
-        if let Some(name) = target.file_name().and_then(|s| s.to_str()) {
-            if name.starts_with('.') {
-                continue;
-            }
+        if let Some(name) = target.file_name().and_then(|s| s.to_str()) && name.starts_with('.') {
+            continue;
         }
         let source = download_base.join(ent.file_name());
         if source.is_dir() {

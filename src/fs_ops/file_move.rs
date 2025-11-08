@@ -132,7 +132,7 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
         .len();
     let available = check_disk_space(dest_dir)
         .with_context(|| format!("check disk space at {}", dest_dir.display()))?;
-    if available < src_size as u64 {
+    if available < src_size {
         return Err(AriaMoveError::InsufficientSpace {
             required: src_size as u128,
             available: available as u128,
