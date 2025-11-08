@@ -15,10 +15,14 @@ on:
 
 jobs:
   dist:
-    name: Build & Upload Distributables
-    runs-on: ubuntu-latest
+    name: Build & Upload Distributables (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -30,22 +34,18 @@ jobs:
           components: rustfmt, clippy
       - name: Install cargo-dist
         run: cargo install cargo-dist --locked
-      - name: Ensure jq is available
-        run: sudo apt-get update && sudo apt-get install -y jq
       - name: Determine tag
         id: tag
+        shell: bash
         run: |
           if [ -n "${{ github.event.inputs.tag_name }}" ]; then
             echo "tag=${{ github.event.inputs.tag_name }}" >> "$GITHUB_OUTPUT"
           else
             echo "tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
           fi
-      - name: Plan dist build
-        run: cargo dist plan --tag "${{ steps.tag.outputs.tag }}" --artifacts=all --output-format=json > dist-plan.json
       - name: Build artifacts
         run: cargo dist build --tag "${{ steps.tag.outputs.tag }}" --artifacts=all
       - name: Upload artifacts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          cargo dist upload --tag "${{ steps.tag.outputs.tag }}" --artifacts=all --body "$(jq -r '.announcement.body // ""' dist-plan.json)"
+        run: cargo dist upload --tag "${{ steps.tag.outputs.tag }}" --artifacts=all
