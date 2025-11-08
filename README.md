@@ -6,18 +6,18 @@
 
 ## Table of Contents
 
-- [Quickstart](#quickstart)
 - [Requirements & Build Tools](#requirements--build-tools)
 - [Installation](#installation)
-- [Usage](#usage) • [--help snapshot](#help-snapshot)
-- [Integration with aria2](#aria2-integration) • [systemd integration](#systemd-integration)
+- [Usage](#usage)
+    - [--help snapshot](#help-snapshot)
+- [Integration with aria2](#aria2-integration)
+    - [systemd integration](#systemd-integration)
 - [Configuration](#configuration)
 - [Logging](#logging)
-- [Development](#development)
-- [Troubleshooting](#troubleshooting)
-- [Prebuilt Binaries](#prebuilt)
-- [Platform Feature Matrix](#feature-matrix)
-- [Links](#links) • [License](#license) • [Contributing](#contributing)
+- [Platform Feature Matrix](#platform-feature-matrix)
+- [Links](#links)
+- [License](#license)
+- [Contributing](#contributing)
 
 ---
 
