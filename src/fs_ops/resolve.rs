@@ -27,17 +27,13 @@ pub fn resolve_source_path(config: &Config, maybe_path: Option<&Path>) -> Result
         match std::fs::symlink_metadata(p) {
             Ok(meta) => {
                 let ft = meta.file_type();
-                if ft.is_file() {
-                    return Ok(p.to_path_buf());
-                } else if ft.is_dir() {
+                if ft.is_file() || ft.is_dir() {
                     return Ok(p.to_path_buf());
                 } else if ft.is_symlink() {
-                    if let Ok(dm) = std::fs::metadata(p) {
-                        if dm.is_file() || dm.is_dir() {
-                            return Ok(p.to_path_buf());
-                        }
-                    }
+                    if let Ok(dm) = std::fs::metadata(p) && (dm.is_file() || dm.is_dir()) {
                         return Ok(p.to_path_buf());
+                    }
+                    return Err(AriaMoveError::ProvidedNotFile(p.to_path_buf()).into());
                 } else {
                     return Err(AriaMoveError::ProvidedNotFile(p.to_path_buf()).into());
                 }
@@ -50,17 +46,13 @@ pub fn resolve_source_path(config: &Config, maybe_path: Option<&Path>) -> Result
                     match std::fs::symlink_metadata(&candidate) {
                         Ok(meta2) => {
                             let ft = meta2.file_type();
-                            if ft.is_file() {
-                                return Ok(candidate);
-                            } else if ft.is_dir() {
+                            if ft.is_file() || ft.is_dir() {
                                 return Ok(candidate);
                             } else if ft.is_symlink() {
-                                if let Ok(dm) = std::fs::metadata(&candidate) {
-                                    if dm.is_file() || dm.is_dir() {
-                                        return Ok(candidate);
-                                    }
-                                }
+                                if let Ok(dm) = std::fs::metadata(&candidate) && (dm.is_file() || dm.is_dir()) {
                                     return Ok(candidate);
+                                }
+                                return Err(AriaMoveError::ProvidedNotFile(candidate).into());
                             } else {
                                 return Err(AriaMoveError::ProvidedNotFile(candidate).into());
                             }

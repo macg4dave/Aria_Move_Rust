@@ -113,16 +113,15 @@ impl Args {
         // was provided. We intentionally do NOT try to be clever here: any
         // single positional is interpreted as a path, and resolution will
         // fail later if it doesn't exist.
-        if self.num_files.is_none() && self.source_path_pos.is_none() {
-            if let Some(t) = &self.task_id { return Some(Self::sanitize_str(t)); }
-        }
+        if self.num_files.is_none() && self.source_path_pos.is_none()
+            && let Some(t) = &self.task_id { return Some(Self::sanitize_str(t)); }
 
         None
     }
 
     // Removed heuristic helper; we accept single positional as path unconditionally.
     #[inline]
-    fn sanitize_path(p: &PathBuf) -> PathBuf { Self::sanitize_str(&p.to_string_lossy()) }
+    fn sanitize_path(p: &std::path::Path) -> PathBuf { Self::sanitize_str(&p.to_string_lossy()) }
 
     #[inline]
     fn sanitize_str(s: &str) -> PathBuf {

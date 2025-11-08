@@ -99,10 +99,8 @@ fn move_file_preserves_metadata_when_requested() -> Result<(), Box<dyn std::erro
         Err(e) => {
             // Helpful diagnostics: list completed dir on failure.
             let mut entries = Vec::new();
-            for e in fs::read_dir(completed.path())? {
-                if let Ok(ent) = e {
-                    entries.push(ent.file_name().to_string_lossy().into_owned());
-                }
+            for ent in (fs::read_dir(completed.path())?).flatten() {
+                entries.push(ent.file_name().to_string_lossy().into_owned());
             }
             panic!(
                 "move_file returned error and destination missing.\nerror: {e}\ncompleted dir contains: {:?}",

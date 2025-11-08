@@ -1,11 +1,10 @@
 //! Unix (non-macOS) implementations of platform helpers.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
-use super::temp::tmp_config_sibling_name;
 use super::common_unix::atomic_write_0600;
 
 /// Open log file for appending with 0600 permissions.
@@ -44,8 +43,7 @@ pub fn set_file_mode_0600(path: &Path) -> io::Result<()> {
     fs::set_permissions(path, perm)
 }
 
-/// Create a hidden sibling temp name for atomic writes.
-fn tmp_sibling_name(target: &Path) -> std::path::PathBuf { tmp_config_sibling_name(target) }
+// (No local tmp_sibling_name wrapper needed; macOS/windows modules keep theirs if required.)
 
 /// Check available disk space at the given path (returns bytes available).
 /// Uses statvfs on Unix. Returns Ok(available_bytes) or an IO error.
@@ -63,7 +61,7 @@ pub fn check_disk_space(path: &Path) -> io::Result<u64> {
                 return Err(io::Error::last_os_error());
             }
             let stat = stat.assume_init();
-            Ok((stat.f_bavail as u64).saturating_mul(stat.f_bsize))
+            Ok((stat.f_bavail).saturating_mul(stat.f_bsize))
         }
     }
     #[cfg(not(target_os = "linux"))]
@@ -107,13 +105,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn tmp_name_uniqueness() {
-        let target = Path::new("dummy.xml");
-        let a = tmp_sibling_name(target);
-        let b = tmp_sibling_name(target);
-        assert_ne!(a, b);
-    }
+    // tmp_sibling_name uniqueness test not needed here after removal.
 
     #[test]
     fn disk_space_smoke() {
