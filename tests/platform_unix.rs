@@ -1,8 +1,8 @@
 #![cfg(unix)]
 
+use aria_move::platform::open_log_file_secure_append;
 use std::os::unix::fs::PermissionsExt;
 use tempfile::tempdir;
-use aria_move::platform::open_log_file_secure_append;
 
 #[test]
 fn unix_open_log_file_sets_0600_mode() {

@@ -29,7 +29,10 @@ fn file_move_preserve_permissions_only() -> Result<(), Box<dyn std::error::Error
     assert!(dest.exists(), "dest exists");
 
     let dst_mode = fs::metadata(&dest)?.permissions().mode() & 0o777;
-    assert_eq!(dst_mode, desired_mode, "destination mode should match source");
+    assert_eq!(
+        dst_mode, desired_mode,
+        "destination mode should match source"
+    );
     Ok(())
 }
 

@@ -4,35 +4,41 @@
 
 use anyhow::Result;
 use aria_move::AriaMoveError;
+use aria_move::output as out;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info};
-use aria_move::output as out;
 
-use aria_move::{
-    default_config_path, move_entry, resolve_source_path, shutdown, Config, LogLevel,
-};
-use aria_move::config::{validate_and_normalize, load_or_init, LoadResult};
 use aria_move::config::xml::load_config_from_xml;
+use aria_move::config::{LoadResult, load_or_init, validate_and_normalize};
+use aria_move::{Config, LogLevel, default_config_path, move_entry, resolve_source_path, shutdown};
 
-use aria_move::cli::Args;
 use crate::logging::init_tracing;
+use aria_move::cli::Args;
 
 /// Run the CLI application.
 pub fn run(args: Args) -> Result<()> {
     // Handle --print-config before logging init
     if args.print_config {
         if let Ok(cfg_env) = std::env::var("ARIA_MOVE_CONFIG") {
-            out::print_info(&format!("Using ARIA_MOVE_CONFIG (explicit):\n  {}\n", cfg_env));
+            out::print_info(&format!(
+                "Using ARIA_MOVE_CONFIG (explicit):\n  {}\n",
+                cfg_env
+            ));
             out::print_info("To override, unset ARIA_MOVE_CONFIG or set it to another file.");
             return Ok(());
         }
         match default_config_path() {
             Ok(p) => {
-                out::print_info(&format!("Default aria_move config path:\n  {}\n", p.display()));
+                out::print_info(&format!(
+                    "Default aria_move config path:\n  {}\n",
+                    p.display()
+                ));
                 if p.exists() {
                     out::print_info("A config file already exists at that location.");
                 } else {
-                    out::print_info("No config file exists there yet. Run without --print-config to create a template.");
+                    out::print_info(
+                        "No config file exists there yet. Run without --print-config to create a template.",
+                    );
                 }
             }
             Err(e) => {
@@ -44,9 +50,16 @@ pub fn run(args: Args) -> Result<()> {
 
     // Create template config if none exists (before logging init)
     if let LoadResult::CreatedTemplate(path) = load_or_init()? {
-        out::print_success(&format!("A template aria_move config was written to: {}", path.display()));
-        out::print_info("Edit the file to set `download_base`, `completed_base` and optionally `log_level` and `log_file`. Example:\n\n<config>\n  <download_base>/path/to/incoming</download_base>\n  <completed_base>/path/to/completed</completed_base>\n  <log_level>normal</log_level>\n  <log_file>/path/to/aria_move.log</log_file>\n</config>\n");
-        out::print_info("Then re-run this command. To use a different location set ARIA_MOVE_CONFIG.");
+        out::print_success(&format!(
+            "A template aria_move config was written to: {}",
+            path.display()
+        ));
+        out::print_info(
+            "Edit the file to set `download_base`, `completed_base` and optionally `log_level` and `log_file`. Example:\n\n<config>\n  <download_base>/path/to/incoming</download_base>\n  <completed_base>/path/to/completed</completed_base>\n  <log_level>normal</log_level>\n  <log_file>/path/to/aria_move.log</log_file>\n</config>\n",
+        );
+        out::print_info(
+            "Then re-run this command. To use a different location set ARIA_MOVE_CONFIG.",
+        );
         return Ok(());
     }
 
@@ -54,14 +67,19 @@ pub fn run(args: Args) -> Result<()> {
     let mut cfg = Config::default();
 
     // Prefer config file values unless CLI overrides them.
-    if let Some((db, cb, lvl, lf, preserve_metadata, preserve_permissions)) = load_config_from_xml() {
+    if let Some((db, cb, lvl, lf, preserve_metadata, preserve_permissions)) = load_config_from_xml()
+    {
         if args.download_base.is_none() {
             cfg.download_base = db;
         }
         if args.completed_base.is_none() {
             cfg.completed_base = cb;
         }
-        if args.log_level.is_none() && let Some(l) = lvl { cfg.log_level = l; }
+        if args.log_level.is_none()
+            && let Some(l) = lvl
+        {
+            cfg.log_level = l;
+        }
         if cfg.log_file.is_none() {
             cfg.log_file = lf;
         }
@@ -89,7 +107,9 @@ pub fn run(args: Args) -> Result<()> {
     if args.preserve_metadata {
         cfg.preserve_metadata = true;
     }
-    if args.preserve_permissions && !cfg.preserve_metadata { cfg.preserve_permissions = true; }
+    if args.preserve_permissions && !cfg.preserve_metadata {
+        cfg.preserve_permissions = true;
+    }
     if args.dry_run {
         cfg.dry_run = true;
     }

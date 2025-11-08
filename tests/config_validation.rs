@@ -1,5 +1,5 @@
+use aria_move::config::{Config, validate_and_normalize};
 use assert_fs::TempDir;
-use aria_move::config::{validate_and_normalize, Config};
 use std::fs;
 
 #[test]
@@ -83,5 +83,8 @@ fn reject_symlink_ancestor() {
     // point cfg at paths through the symlink
     let mut cfg = Config::new(link.join("incoming"), link.join("completed"));
     let res = validate_and_normalize(&mut cfg);
-    assert!(res.is_err(), "expected rejection when a symlink is in an ancestor path");
+    assert!(
+        res.is_err(),
+        "expected rejection when a symlink is in an ancestor path"
+    );
 }

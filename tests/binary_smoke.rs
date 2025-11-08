@@ -8,5 +8,8 @@ fn binary_print_config_succeeds() {
         .arg("--print-config")
         .output()
         .expect("spawn binary");
-    assert!(out.status.success(), "binary should succeed with --print-config");
+    assert!(
+        out.status.success(),
+        "binary should succeed with --print-config"
+    );
 }

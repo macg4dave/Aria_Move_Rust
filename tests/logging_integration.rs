@@ -1,14 +1,14 @@
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 
-use tracing::info;
-use tracing_subscriber::{fmt as tsfmt, registry};
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_appender::non_blocking::WorkerGuard;
+use aria_move::platform::open_log_file_secure_append;
 use std::path::PathBuf;
 use tempfile::tempdir;
-use aria_move::platform::open_log_file_secure_append;
+use tracing::info;
+use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::filter::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::{fmt as tsfmt, registry};
 
 /// A simple writer that appends written bytes into an in-memory Vec<u8>.
 /// We wrap the Vec in an Arc<Mutex<...>> so the MakeWriter closure can clone it.
@@ -67,7 +67,11 @@ fn scoped_logging_writes_to_buffer_without_global_side_effects() {
     // Should contain our message and the target (we disabled target in the layer,
     // but the compact formatter still includes the message text). We check the
     // message text to ensure the I/O path worked.
-    assert!(contents.contains("integration-test: hello world"), "logged output did not contain expected text; contents={}", contents);
+    assert!(
+        contents.contains("integration-test: hello world"),
+        "logged output did not contain expected text; contents={}",
+        contents
+    );
 }
 
 #[test]
@@ -80,7 +84,10 @@ fn file_logging_writes_to_custom_path_and_verifies_output() {
     // the production logger would refuse file logging. In that case we skip this
     // test to avoid false failures in CI/dev setups.
     if aria_move::path_has_symlink_ancestor(&log_path).unwrap() {
-        eprintln!("Skipping file logging test: path has symlink ancestor: {}", log_path.display());
+        eprintln!(
+            "Skipping file logging test: path has symlink ancestor: {}",
+            log_path.display()
+        );
         return;
     }
 
@@ -88,7 +95,8 @@ fn file_logging_writes_to_custom_path_and_verifies_output() {
     let file = open_log_file_secure_append(&log_path).expect("open_log_file_secure_append");
 
     // Wrap in non-blocking appender used by tracing
-    let (writer, guard): (tracing_appender::non_blocking::NonBlocking, WorkerGuard) = tracing_appender::non_blocking(file);
+    let (writer, guard): (tracing_appender::non_blocking::NonBlocking, WorkerGuard) =
+        tracing_appender::non_blocking(file);
 
     // Build a simple file-only logging layer
     let file_layer = tsfmt::layer()
@@ -110,5 +118,9 @@ fn file_logging_writes_to_custom_path_and_verifies_output() {
 
     // Read the file and assert it contains the expected message
     let contents = std::fs::read_to_string(&log_path).expect("read log file");
-    assert!(contents.contains("file-logging-test"), "log file did not contain expected text; contents={}", contents);
+    assert!(
+        contents.contains("file-logging-test"),
+        "log file did not contain expected text; contents={}",
+        contents
+    );
 }

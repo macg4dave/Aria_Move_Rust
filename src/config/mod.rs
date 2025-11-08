@@ -6,13 +6,13 @@ pub mod paths;
 pub mod types;
 pub mod xml;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use std::fs;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf, Component};
+use std::path::{Component, Path, PathBuf};
 
-pub use types::{Config, LogLevel};
 pub use paths::{default_config_path, default_log_path};
+pub use types::{Config, LogLevel};
 
 // --- existing/public load_or_init / validate_and_normalize functions remain ---
 #[derive(Debug)]
@@ -89,7 +89,7 @@ pub fn path_has_symlink_ancestor(path: &Path) -> io::Result<bool> {
 }
 
 fn write_template(path: &Path) -> io::Result<()> {
-        let template = r#"<!--
+    let template = r#"<!--
     aria_move configuration (XML)
 
     Boolean flags (true/false):
@@ -138,11 +138,17 @@ fn ensure_safe_dir(dir: &Path) -> Result<()> {
             // Avoid external crate dependency; check effective UID directly.
             let is_root = unsafe { libc::geteuid() } == 0;
             let display_str = dir.display().to_string();
-            if is_root && (display_str == "/path/to/incoming" || display_str == "/path/to/completed") {
-                return Err(anyhow!("Refusing to create placeholder default path '{}' as root; edit config.xml to real paths.", display_str));
+            if is_root
+                && (display_str == "/path/to/incoming" || display_str == "/path/to/completed")
+            {
+                return Err(anyhow!(
+                    "Refusing to create placeholder default path '{}' as root; edit config.xml to real paths.",
+                    display_str
+                ));
             }
         }
-        create_secure_dir_all(dir).with_context(|| format!("create directory '{}'", dir.display()))?;
+        create_secure_dir_all(dir)
+            .with_context(|| format!("create directory '{}'", dir.display()))?;
     } else if !dir.is_dir() {
         return Err(anyhow!("'{}' exists but is not a directory", dir.display()));
     }

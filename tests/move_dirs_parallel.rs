@@ -72,11 +72,17 @@ fn move_two_directories_concurrently() -> Result<(), Box<dyn std::error::Error>>
     let out_b = handle_b.join().expect("join b")?;
 
     if !out_a.status.success() {
-        eprintln!("Process A stderr:\n{}", String::from_utf8_lossy(&out_a.stderr));
+        eprintln!(
+            "Process A stderr:\n{}",
+            String::from_utf8_lossy(&out_a.stderr)
+        );
         panic!("Process A failed");
     }
     if !out_b.status.success() {
-        eprintln!("Process B stderr:\n{}", String::from_utf8_lossy(&out_b.stderr));
+        eprintln!(
+            "Process B stderr:\n{}",
+            String::from_utf8_lossy(&out_b.stderr)
+        );
         panic!("Process B failed");
     }
 

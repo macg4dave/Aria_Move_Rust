@@ -1,12 +1,19 @@
-use std::fs;use std::process::Command;use tempfile::tempdir;use assert_cmd::cargo;
+use assert_cmd::cargo;
+use std::fs;
+use std::process::Command;
+use tempfile::tempdir;
 
 fn write_cfg(path: &std::path::Path, download: &std::path::Path, completed: &std::path::Path) {
-    let xml = format!(r#"<config>
+    let xml = format!(
+        r#"<config>
   <download_base>{}</download_base>
   <completed_base>{}</completed_base>
   <log_level>quiet</log_level>
   <preserve_metadata>false</preserve_metadata>
-</config>"#, download.display(), completed.display());
+</config>"#,
+        download.display(),
+        completed.display()
+    );
     fs::write(path, xml).unwrap();
 }
 
@@ -40,12 +47,23 @@ fn three_arg_single_quoted_dir_with_trailing_backslash_moves_ok() {
         .output()
         .expect("spawn binary");
 
-    assert!(out.status.success(), "expected success; stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "expected success; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     // Directory should be moved under completed with same name
     let dest_dir = completed.join("New folder");
-    assert!(dest_dir.exists(), "dest dir should exist: {}", dest_dir.display());
-    assert!(dest_dir.join("file.txt").exists(), "inner file should have moved");
+    assert!(
+        dest_dir.exists(),
+        "dest dir should exist: {}",
+        dest_dir.display()
+    );
+    assert!(
+        dest_dir.join("file.txt").exists(),
+        "inner file should have moved"
+    );
     assert!(!dir.exists(), "source dir should be gone");
 }
 
@@ -75,7 +93,11 @@ fn three_arg_double_quoted_file_moves_ok() {
         .output()
         .expect("spawn binary");
 
-    assert!(out.status.success(), "expected success; stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "expected success; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let dest = completed.join("with space.bin");
     assert!(dest.exists(), "dest should exist");

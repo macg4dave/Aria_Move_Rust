@@ -3,7 +3,7 @@
 use std::fs;
 use tempfile::tempdir;
 
-use aria_move::{load_config_from_xml_path, LogLevel};
+use aria_move::{LogLevel, load_config_from_xml_path};
 
 #[test]
 fn reads_config_xml_and_applies_values() {
@@ -34,9 +34,16 @@ fn reads_config_xml_and_applies_values() {
     let cfg = load_config_from_xml_path(&cfg_path).expect("load_config_from_xml_path");
 
     assert_eq!(cfg.download_base, download_base, "download_base mismatch");
-    assert_eq!(cfg.completed_base, completed_base, "completed_base mismatch");
-    assert_eq!(cfg.log_file.as_deref(), Some(log_file.as_path()), "log_file mismatch");
+    assert_eq!(
+        cfg.completed_base, completed_base,
+        "completed_base mismatch"
+    );
+    assert_eq!(
+        cfg.log_file.as_deref(),
+        Some(log_file.as_path()),
+        "log_file mismatch"
+    );
     assert_eq!(cfg.log_level, LogLevel::Normal, "log_level mismatch");
     assert!(cfg.preserve_metadata, "preserve_metadata should be true");
-  // auto-pick window removed; no assertion for recency.
+    // auto-pick window removed; no assertion for recency.
 }

@@ -1,5 +1,5 @@
-use std::str::FromStr;
 use aria_move::config::types::LogLevel;
+use std::str::FromStr;
 
 #[test]
 fn parse_common_levels_case_insensitive() {
@@ -27,7 +27,7 @@ fn display_roundtrips_with_fromstr() {
         LogLevel::Info,
         LogLevel::Debug,
     ];
-    for lvl in levels { 
+    for lvl in levels {
         let s = lvl.to_string();
         let parsed = LogLevel::from_str(&s).expect("from_str should parse display string");
         assert_eq!(parsed, lvl, "roundtrip failed for {s}");

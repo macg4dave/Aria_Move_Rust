@@ -1,8 +1,8 @@
 #![cfg(target_os = "macos")]
 
+use aria_move::platform::open_log_file_secure_append;
 use std::os::unix::fs::PermissionsExt;
 use tempfile::tempdir;
-use aria_move::platform::open_log_file_secure_append;
 
 #[test]
 fn macos_open_log_file_sets_0600_mode() {
@@ -16,5 +16,9 @@ fn macos_open_log_file_sets_0600_mode() {
     let meta = std::fs::metadata(&log_path).expect("metadata");
     let mode = meta.permissions().mode() & 0o777;
 
-    assert_eq!(mode, 0o600, "expected file mode 0600 on macOS, got {:o}", mode);
+    assert_eq!(
+        mode, 0o600,
+        "expected file mode 0600 on macOS, got {:o}",
+        mode
+    );
 }

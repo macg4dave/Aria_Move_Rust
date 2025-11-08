@@ -4,8 +4,8 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-use aria_move::fs_ops::{safe_copy_and_rename_with_metadata, move_dir};
 use aria_move::Config;
+use aria_move::fs_ops::{move_dir, safe_copy_and_rename_with_metadata};
 use tempfile::tempdir;
 
 fn write_file(path: &Path, contents: &str) {

@@ -15,7 +15,9 @@ static REASON: AtomicU8 = AtomicU8::new(0);
 
 /// Request a cooperative shutdown (idempotent).
 #[inline]
-pub fn request() { request_with_reason(1); }
+pub fn request() {
+    request_with_reason(1);
+}
 
 /// Request with a semantic reason code; first reason sticks (idempotent flag).
 pub fn request_with_reason(code: u8) {
@@ -33,7 +35,9 @@ pub fn is_requested() -> bool {
 }
 
 /// Get numeric reason code (0 = none).
-pub fn reason_code() -> u8 { REASON.load(Ordering::Relaxed) }
+pub fn reason_code() -> u8 {
+    REASON.load(Ordering::Relaxed)
+}
 
 /// Test/utility-only: clear the shutdown flag.
 #[cfg(any(test, feature = "test-helpers"))]
@@ -48,7 +52,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reason_defaults_to_zero() { reset(); assert_eq!(reason_code(), 0); assert!(!is_requested()); }
+    fn reason_defaults_to_zero() {
+        reset();
+        assert_eq!(reason_code(), 0);
+        assert!(!is_requested());
+    }
 
     #[test]
     fn request_sets_flag_and_reason() {

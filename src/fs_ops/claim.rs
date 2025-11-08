@@ -41,14 +41,17 @@ pub(super) fn claim_source(src: &Path) -> io::Result<PathBuf> {
         let new_name = if attempt == 0 {
             OsString::from(format!(".aria_move.moving.{}.{}", pid, base_nanos))
         } else {
-            OsString::from(format!(".aria_move.moving.{}.{}.{}", pid, base_nanos, attempt))
+            OsString::from(format!(
+                ".aria_move.moving.{}.{}.{}",
+                pid, base_nanos, attempt
+            ))
         };
         let claimed = parent.join(new_name);
 
         match fs::rename(src, &claimed) {
             Ok(()) => {
                 return Ok(claimed);
-            },
+            }
             Err(e) => {
                 // If the source vanished, propagate NotFound (caller treats as race lost).
                 if e.kind() == io::ErrorKind::NotFound {
@@ -65,10 +68,8 @@ pub(super) fn claim_source(src: &Path) -> io::Result<PathBuf> {
     }
 
     // If we exhausted retries, fall back to a final rename attempt to surface the real error.
-    let final_name: OsString = OsString::from(format!(
-        ".aria_move.moving.{}.{}.final",
-        pid, base_nanos
-    ));
+    let final_name: OsString =
+        OsString::from(format!(".aria_move.moving.{}.{}.final", pid, base_nanos));
     let final_claimed = parent.join(final_name);
     fs::rename(src, &final_claimed).map(|_| final_claimed)
 }
@@ -90,7 +91,11 @@ mod tests {
         assert!(!src.exists(), "source should be gone after claim");
         assert!(claimed.exists(), "claimed path should exist");
         let fname = claimed.file_name().unwrap().to_string_lossy().to_string();
-        assert!(fname.starts_with(".aria_move.moving."), "unexpected claimed name: {}", fname);
+        assert!(
+            fname.starts_with(".aria_move.moving."),
+            "unexpected claimed name: {}",
+            fname
+        );
     }
 
     #[test]
@@ -118,7 +123,13 @@ mod tests {
         // by racing an additional file creation for a short period.
         let claimed = claim_source(&src).expect("claim should succeed and retry if needed");
         assert!(claimed.exists());
-        assert!(claimed.file_name().unwrap().to_string_lossy().starts_with(".aria_move.moving."));
+        assert!(
+            claimed
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".aria_move.moving.")
+        );
     }
 
     #[test]

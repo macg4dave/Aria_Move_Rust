@@ -6,7 +6,7 @@
 //! - Per-source move lock to avoid concurrent claims on the same source.
 //! - Per-destination-base lock to serialize finalization into the completed_base.
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use rayon::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -17,8 +17,8 @@ use crate::config::types::Config;
 use crate::shutdown;
 use crate::utils::{ensure_not_base, file_is_mutable};
 
-use super::lock::{acquire_dir_lock, acquire_move_lock};
 use super::io_error_with_help;
+use super::lock::{acquire_dir_lock, acquire_move_lock};
 use super::space;
 
 /// Move directory contents into completed_base/<src_dir_name>.
@@ -63,12 +63,17 @@ pub fn move_dir(config: &Config, src_dir: &Path) -> Result<PathBuf> {
     let force_copy = false;
 
     #[cfg(unix)]
-    let cross_device = if let (Some(src_parent), Some(dst_parent)) = (src_dir.parent(), target.parent()) {
-        use std::os::unix::fs::MetadataExt;
-        if let (Ok(s_meta), Ok(d_meta)) = (fs::metadata(src_parent), fs::metadata(dst_parent)) {
-            s_meta.dev() != d_meta.dev()
-        } else { false }
-    } else { false };
+    let cross_device =
+        if let (Some(src_parent), Some(dst_parent)) = (src_dir.parent(), target.parent()) {
+            use std::os::unix::fs::MetadataExt;
+            if let (Ok(s_meta), Ok(d_meta)) = (fs::metadata(src_parent), fs::metadata(dst_parent)) {
+                s_meta.dev() != d_meta.dev()
+            } else {
+                false
+            }
+        } else {
+            false
+        };
     #[cfg(not(unix))]
     let cross_device = false;
 
@@ -79,7 +84,9 @@ pub fn move_dir(config: &Config, src_dir: &Path) -> Result<PathBuf> {
                 // Best-effort fsync of destination parent (and source parent if different) on Unix.
                 #[cfg(unix)]
                 {
-                    if let Some(dst_parent) = target.parent() && let Err(e) = super::util::fsync_dir(dst_parent) {
+                    if let Some(dst_parent) = target.parent()
+                        && let Err(e) = super::util::fsync_dir(dst_parent)
+                    {
                         warn!(error = %e, dir = %dst_parent.display(), "best-effort fsync(dst_parent) failed");
                     }
                     if let (Some(sp), Some(dp)) = (src_dir.parent(), target.parent())
@@ -96,15 +103,25 @@ pub fn move_dir(config: &Config, src_dir: &Path) -> Result<PathBuf> {
                 let hint: &str = if let Some(code) = e.raw_os_error() {
                     #[cfg(unix)]
                     {
-                        if code == libc::EXDEV { "cross-filesystem; will copy instead" }
-                        else if code == libc::EACCES || code == libc::EPERM { "permission denied; check destination perms" }
-                        else { "falling back to copy" }
+                        if code == libc::EXDEV {
+                            "cross-filesystem; will copy instead"
+                        } else if code == libc::EACCES || code == libc::EPERM {
+                            "permission denied; check destination perms"
+                        } else {
+                            "falling back to copy"
+                        }
                     }
                     #[cfg(not(unix))]
                     {
-                        if e.kind() == std::io::ErrorKind::PermissionDenied { "permission denied; check destination perms" } else { "falling back to copy" }
+                        if e.kind() == std::io::ErrorKind::PermissionDenied {
+                            "permission denied; check destination perms"
+                        } else {
+                            "falling back to copy"
+                        }
                     }
-                } else { "falling back to copy" };
+                } else {
+                    "falling back to copy"
+                };
                 warn!(error = %e, hint, "Atomic directory rename failed, using copy fallback");
             }
         }

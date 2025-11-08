@@ -21,12 +21,16 @@ fn relative_env_config_path_resolved() {
     fs::create_dir_all(&completed_base).unwrap();
 
     let cfg_full = base.join(rel_cfg);
-        let xml = format!(r#"<config>
+    let xml = format!(
+        r#"<config>
     <download_base>{}</download_base>
     <completed_base>{}</completed_base>
     <log_level>normal</log_level>
     <preserve_metadata>false</preserve_metadata>
-</config>"#, download_base.display(), completed_base.display());
+</config>"#,
+        download_base.display(),
+        completed_base.display()
+    );
     fs::write(&cfg_full, xml).unwrap();
 
     let src = download_base.join("file.bin");
@@ -44,7 +48,11 @@ fn relative_env_config_path_resolved() {
     assert!(out.status.success(), "binary failed");
 
     // After resolution the config should be treated as absolute (since we joined CWD)
-    assert!(cfg_full.exists(), "expected resolved config file to exist at {}", cfg_full.display());
+    assert!(
+        cfg_full.exists(),
+        "expected resolved config file to exist at {}",
+        cfg_full.display()
+    );
 
     // File moved
     let moved = completed_base.join("file.bin");

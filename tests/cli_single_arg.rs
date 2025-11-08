@@ -48,7 +48,11 @@ fn single_positional_moves_file_to_completed() {
 
     // File should have been moved into completed_base
     let expected = completed_base.join("file.iso");
-    assert!(expected.exists(), "expected file moved to completed: {}", expected.display());
+    assert!(
+        expected.exists(),
+        "expected file moved to completed: {}",
+        expected.display()
+    );
     // Original should not exist
     assert!(!src.exists(), "original source should be moved away");
 }

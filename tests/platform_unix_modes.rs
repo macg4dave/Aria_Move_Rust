@@ -1,9 +1,9 @@
 #![cfg(unix)]
 
+use aria_move::platform::{set_dir_mode_0700, set_file_mode_0600};
+use std::fs::{self, File};
 use std::os::unix::fs::PermissionsExt;
 use tempfile::tempdir;
-use std::fs::{self, File};
-use aria_move::platform::{set_dir_mode_0700, set_file_mode_0600};
 
 #[test]
 fn unix_set_dir_and_file_modes() {

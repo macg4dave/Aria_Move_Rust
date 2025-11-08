@@ -4,13 +4,13 @@
 //! - Atomically renames temp -> dest (Windows overwrite-safe)
 //! - Fsyncs the destination directory (Unix; handled in atomic::try_atomic_move)
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use std::fs;
 use std::path::Path;
 
-use super::{io_copy, metadata, util};
 use super::atomic::try_atomic_move;
 use super::io_error_with_help;
+use super::{io_copy, metadata, util};
 
 /// Core: copy src -> temp in dest dir, then atomic rename temp -> dest.
 /// Notes:
@@ -55,8 +55,9 @@ pub fn safe_copy_and_rename(src: &Path, dest: &Path) -> Result<()> {
             return Ok(());
         } else {
             // Resume from existing offset
-            let res = io_copy::copy_streaming_resume(src, &tmp_path, existing)
-                .map_err(io_error_with_help("resume copy to temporary file", &tmp_path))?;
+            let res = io_copy::copy_streaming_resume(src, &tmp_path, existing).map_err(
+                io_error_with_help("resume copy to temporary file", &tmp_path),
+            )?;
             if res != src_size {
                 // Incomplete resume; treat as error and cleanup
                 let _ = fs::remove_file(&tmp_path);

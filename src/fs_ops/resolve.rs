@@ -10,11 +10,10 @@
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
-use tracing::{warn, instrument};
+use tracing::{instrument, warn};
 
 use crate::config::types::Config;
 use crate::errors::AriaMoveError;
- 
 
 /// Resolve the source path. If `maybe_path` is Some and exists, that wins.
 /// Otherwise returns an error (auto-pick is out of scope).
@@ -30,7 +29,9 @@ pub fn resolve_source_path(config: &Config, maybe_path: Option<&Path>) -> Result
                 if ft.is_file() || ft.is_dir() {
                     return Ok(p.to_path_buf());
                 } else if ft.is_symlink() {
-                    if let Ok(dm) = std::fs::metadata(p) && (dm.is_file() || dm.is_dir()) {
+                    if let Ok(dm) = std::fs::metadata(p)
+                        && (dm.is_file() || dm.is_dir())
+                    {
                         return Ok(p.to_path_buf());
                     }
                     return Err(AriaMoveError::ProvidedNotFile(p.to_path_buf()).into());
@@ -49,7 +50,9 @@ pub fn resolve_source_path(config: &Config, maybe_path: Option<&Path>) -> Result
                             if ft.is_file() || ft.is_dir() {
                                 return Ok(candidate);
                             } else if ft.is_symlink() {
-                                if let Ok(dm) = std::fs::metadata(&candidate) && (dm.is_file() || dm.is_dir()) {
+                                if let Ok(dm) = std::fs::metadata(&candidate)
+                                    && (dm.is_file() || dm.is_dir())
+                                {
                                     return Ok(candidate);
                                 }
                                 return Err(AriaMoveError::ProvidedNotFile(candidate).into());
@@ -81,4 +84,3 @@ fn is_bare_filename(p: &Path) -> bool {
     // A single path component (no separators) and not absolute.
     !p.has_root() && p.components().count() == 1 && p.file_name().is_some()
 }
- 

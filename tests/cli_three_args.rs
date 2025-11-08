@@ -1,13 +1,20 @@
-use std::fs;use std::process::Command;use tempfile::tempdir;use assert_cmd::cargo;
+use assert_cmd::cargo;
+use std::fs;
+use std::process::Command;
+use tempfile::tempdir;
 
 // Helper to write minimal XML config
 fn write_cfg(path: &std::path::Path, download: &std::path::Path, completed: &std::path::Path) {
-    let xml = format!(r#"<config>
+    let xml = format!(
+        r#"<config>
   <download_base>{}</download_base>
   <completed_base>{}</completed_base>
   <log_level>quiet</log_level>
   <preserve_metadata>false</preserve_metadata>
-</config>"#, download.display(), completed.display());
+</config>"#,
+        download.display(),
+        completed.display()
+    );
     fs::write(path, xml).unwrap();
 }
 
@@ -28,15 +35,18 @@ fn three_arg_missing_path_errors() {
     let me = cargo::cargo_bin!("aria_move");
     let out = Command::new(me)
         .env("ARIA_MOVE_CONFIG", &cfg_path)
-        .arg("TASKID123")   // task_id positional
-        .arg("1")           // num_files positional (legacy form)
-        .arg(&missing)       // missing source path
+        .arg("TASKID123") // task_id positional
+        .arg("1") // num_files positional (legacy form)
+        .arg(&missing) // missing source path
         .output()
         .expect("spawn binary");
 
     assert!(!out.status.success(), "expected failure status");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("Source path not found") || stderr.contains("source_not_found"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("Source path not found") || stderr.contains("source_not_found"),
+        "unexpected stderr: {stderr}"
+    );
 }
 
 #[test]
@@ -58,12 +68,16 @@ fn three_arg_move_success() {
     let out = Command::new(me)
         .env("ARIA_MOVE_CONFIG", &cfg_path)
         .arg("ABCDEF") // task_id
-        .arg("1")      // num_files
-        .arg(&src)      // explicit path
+        .arg("1") // num_files
+        .arg(&src) // explicit path
         .output()
         .expect("spawn binary");
 
-    assert!(out.status.success(), "expected success status; stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "expected success status; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let dest = completed.join("ok.bin");
     assert!(dest.exists(), "expected file moved to completed");
@@ -95,10 +109,17 @@ fn three_arg_move_directory_success() {
         .output()
         .expect("spawn binary");
 
-    assert!(out.status.success(), "expected directory move success; stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "expected directory move success; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let dest_dir = completed.join("dir space");
     assert!(dest_dir.exists(), "destination directory should exist");
-    assert!(dest_dir.join("nested.txt").exists(), "nested file should move");
+    assert!(
+        dest_dir.join("nested.txt").exists(),
+        "nested file should move"
+    );
     assert!(!dir_src.exists(), "source directory should be removed");
 }
 

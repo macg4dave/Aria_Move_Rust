@@ -4,7 +4,7 @@
 //! - Callers decide whether to treat failures as fatal; this helper itself does not.
 
 use anyhow::Result;
-use filetime::{set_file_times, FileTime};
+use filetime::{FileTime, set_file_times};
 #[cfg(not(unix))]
 use filetime::{set_file_atime, set_file_mtime};
 use std::fs;
@@ -20,7 +20,7 @@ pub fn preserve_metadata(dest: &Path, src_meta: &fs::Metadata) -> Result<()> {
     // 1) Timestamps
     #[cfg(unix)]
     {
-    use std::os::unix::fs::MetadataExt;
+        use std::os::unix::fs::MetadataExt;
         let mt = FileTime::from_unix_time(src_meta.mtime(), src_meta.mtime_nsec() as u32);
         let at = FileTime::from_unix_time(src_meta.atime(), src_meta.atime_nsec() as u32);
         if let Err(e) = set_file_times(dest, at, mt) {
@@ -125,8 +125,8 @@ pub fn preserve_permissions_only(dest: &Path, src_meta: &fs::Metadata) -> Result
 pub fn preserve_xattrs(src: &Path, dest: &Path) -> Result<()> {
     #[cfg(feature = "xattrs")]
     {
-    use tracing::{trace, warn};
-    let mut _had_error = false; // retained for future diagnostics aggregation
+        use tracing::{trace, warn};
+        let mut _had_error = false; // retained for future diagnostics aggregation
         // Attempt to list xattrs on source
         match xattr::list(src) {
             Ok(names) => {

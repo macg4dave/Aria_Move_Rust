@@ -1,10 +1,10 @@
 #![cfg(unix)]
 
+use assert_cmd::cargo;
 use std::fs;
 use std::os::unix::fs as unix_fs;
 use std::process::Command;
 use tempfile::tempdir;
-use assert_cmd::cargo;
 
 fn write_cfg(path: &std::path::Path, download: &std::path::Path, completed: &std::path::Path) {
     let xml = format!(
@@ -51,7 +51,9 @@ fn single_arg_bare_symlink_rejected() {
     assert!(!out.status.success(), "expected symlink to be rejected");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("Refusing to move symlink") || stderr.contains("refusing") || stderr.contains("symlink"),
+        stderr.contains("Refusing to move symlink")
+            || stderr.contains("refusing")
+            || stderr.contains("symlink"),
         "unexpected stderr: {stderr}"
     );
 }
@@ -83,7 +85,9 @@ fn explicit_path_symlink_rejected() {
     assert!(!out.status.success(), "expected symlink to be rejected");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("Refusing to move symlink") || stderr.contains("refusing") || stderr.contains("symlink"),
+        stderr.contains("Refusing to move symlink")
+            || stderr.contains("refusing")
+            || stderr.contains("symlink"),
         "unexpected stderr: {stderr}"
     );
 }

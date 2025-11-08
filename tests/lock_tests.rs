@@ -1,6 +1,6 @@
-use std::{fs};
+use std::fs;
 
-use aria_move::fs_ops::{acquire_dir_lock, try_acquire_dir_lock, acquire_move_lock};
+use aria_move::fs_ops::{acquire_dir_lock, acquire_move_lock, try_acquire_dir_lock};
 
 #[test]
 fn try_lock_uncontended() {

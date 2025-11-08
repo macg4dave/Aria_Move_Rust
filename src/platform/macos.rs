@@ -1,12 +1,12 @@
 //! macOS implementations of platform helpers.
 //! Split from the generic Unix module to allow future macOS-specific extensions.
 
+use super::common_unix::atomic_write_0600;
 use anyhow::Result;
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
-use super::common_unix::atomic_write_0600;
 
 /// Open log file for appending with 0600 permissions (macOS variant, identical to Unix).
 pub fn open_log_file_secure_append(path: &Path) -> io::Result<File> {
@@ -30,7 +30,9 @@ pub fn open_log_file_secure_append(path: &Path) -> io::Result<File> {
 }
 
 /// Write config atomically: temp file (0600) + fsync + rename + fsync dir.
-pub fn write_config_secure_new_0600(path: &Path, contents: &[u8]) -> Result<()> { atomic_write_0600(path, contents) }
+pub fn write_config_secure_new_0600(path: &Path, contents: &[u8]) -> Result<()> {
+    atomic_write_0600(path, contents)
+}
 
 /// POSIX chmod 0700 for directories.
 pub fn set_dir_mode_0700(path: &Path) -> io::Result<()> {
@@ -46,7 +48,9 @@ pub fn set_file_mode_0600(path: &Path) -> io::Result<()> {
 
 /// Create a hidden sibling temp name for atomic writes.
 #[cfg(test)]
-fn tmp_sibling_name(target: &Path) -> std::path::PathBuf { super::temp::tmp_config_sibling_name(target) }
+fn tmp_sibling_name(target: &Path) -> std::path::PathBuf {
+    super::temp::tmp_config_sibling_name(target)
+}
 
 /// Check available disk space at the given path (returns bytes available) using statvfs.
 pub fn check_disk_space(path: &Path) -> io::Result<u64> {
@@ -95,7 +99,11 @@ mod tests {
         for entry in fs::read_dir(dir.path()).unwrap() {
             let p = entry.unwrap().path();
             let name = p.file_name().unwrap().to_string_lossy();
-            assert!(!name.starts_with(".aria_move.config.tmp."), "leftover temp file: {}", name);
+            assert!(
+                !name.starts_with(".aria_move.config.tmp."),
+                "leftover temp file: {}",
+                name
+            );
         }
     }
 
@@ -109,8 +117,8 @@ mod tests {
 
     #[test]
     fn tmp_names_unique_under_concurrency() {
-        use std::thread;
         use std::sync::Mutex;
+        use std::thread;
         let target = Path::new("dummy.xml");
         let names = Mutex::new(Vec::new());
         let mut threads = Vec::new();
@@ -118,7 +126,9 @@ mod tests {
             let t = target.to_path_buf();
             threads.push(thread::spawn(move || tmp_sibling_name(&t)));
         }
-        for th in threads { names.lock().unwrap().push(th.join().unwrap()); }
+        for th in threads {
+            names.lock().unwrap().push(th.join().unwrap());
+        }
         let v = names.lock().unwrap();
         let mut sorted = v.clone();
         sorted.sort();
@@ -155,7 +165,10 @@ mod tests {
         // Ensure no temp leftovers after two writes.
         for entry in fs::read_dir(dir.path()).unwrap() {
             let name = entry.unwrap().file_name().to_string_lossy().into_owned();
-            assert!(!name.starts_with(".aria_move.config.tmp."), "leftover temp file after double write: {name}");
+            assert!(
+                !name.starts_with(".aria_move.config.tmp."),
+                "leftover temp file after double write: {name}"
+            );
         }
     }
 
@@ -170,14 +183,17 @@ mod tests {
         // Ensure temp cleaned up.
         for entry in fs::read_dir(dir.path()).unwrap() {
             let name = entry.unwrap().file_name().to_string_lossy().into_owned();
-            assert!(!name.starts_with(".aria_move.config.tmp."), "leftover temp after failed rename: {name}");
+            assert!(
+                !name.starts_with(".aria_move.config.tmp."),
+                "leftover temp after failed rename: {name}"
+            );
         }
     }
 
     #[test]
     fn concurrent_log_appends() {
-        use std::thread;
         use std::sync::Arc;
+        use std::thread;
         let dir = tempdir().unwrap();
         let log_path = dir.path().join("log.txt");
         let path_arc = Arc::new(log_path);
@@ -189,11 +205,19 @@ mod tests {
                 f.write_all(format!("line{i}\n").as_bytes()).unwrap();
             }));
         }
-        for t in threads { t.join().unwrap(); }
+        for t in threads {
+            t.join().unwrap();
+        }
         let contents = fs::read(path_arc.as_ref()).unwrap();
         let s = String::from_utf8(contents).unwrap();
-        for i in 0..8 { assert!(s.contains(&format!("line{i}")), "missing line{i} in log"); }
-        let mode = fs::metadata(path_arc.as_ref()).unwrap().permissions().mode() & 0o777;
+        for i in 0..8 {
+            assert!(s.contains(&format!("line{i}")), "missing line{i} in log");
+        }
+        let mode = fs::metadata(path_arc.as_ref())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
         assert_eq!(mode, 0o600, "log file mode drifted from 0600");
     }
 }

@@ -1,4 +1,6 @@
-use std::fs; use tempfile::tempdir; use aria_move::{load_config_from_xml_path, Config};
+use aria_move::{Config, load_config_from_xml_path};
+use std::fs;
+use tempfile::tempdir;
 
 #[test]
 fn missing_fields_use_defaults() {

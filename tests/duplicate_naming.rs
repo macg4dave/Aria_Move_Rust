@@ -2,7 +2,7 @@ use std::ffi::OsStr;
 use std::fs;
 use tempfile::tempdir;
 
-use aria_move::fs_ops::{resolve_destination, OnDuplicate};
+use aria_move::fs_ops::{OnDuplicate, resolve_destination};
 
 #[test]
 fn no_collision_returns_requested_name() {
@@ -18,7 +18,11 @@ fn single_collision_gets_suffix_two() {
     let td = tempdir().unwrap();
     let dst_dir = td.path();
     fs::write(dst_dir.join("file.txt"), b"x").unwrap();
-    let dst = resolve_destination(dst_dir, OsStr::new("file.txt"), OnDuplicate::RenameWithSuffix);
+    let dst = resolve_destination(
+        dst_dir,
+        OsStr::new("file.txt"),
+        OnDuplicate::RenameWithSuffix,
+    );
     assert_eq!(dst, dst_dir.join("file (2).txt"));
 }
 
@@ -29,7 +33,11 @@ fn multiple_collisions_increment_suffix() {
     fs::write(dst_dir.join("file.txt"), b"1").unwrap();
     fs::write(dst_dir.join("file (2).txt"), b"2").unwrap();
     fs::write(dst_dir.join("file (3).txt"), b"3").unwrap();
-    let dst = resolve_destination(dst_dir, OsStr::new("file.txt"), OnDuplicate::RenameWithSuffix);
+    let dst = resolve_destination(
+        dst_dir,
+        OsStr::new("file.txt"),
+        OnDuplicate::RenameWithSuffix,
+    );
     assert_eq!(dst, dst_dir.join("file (4).txt"));
 }
 
@@ -47,7 +55,11 @@ fn multi_extension_position() {
     let td = tempdir().unwrap();
     let dst_dir = td.path();
     fs::write(dst_dir.join("archive.tar.gz"), b"a").unwrap();
-    let dst = resolve_destination(dst_dir, OsStr::new("archive.tar.gz"), OnDuplicate::RenameWithSuffix);
+    let dst = resolve_destination(
+        dst_dir,
+        OsStr::new("archive.tar.gz"),
+        OnDuplicate::RenameWithSuffix,
+    );
     assert_eq!(dst, dst_dir.join("archive.tar (2).gz"));
 }
 
@@ -81,6 +93,12 @@ fn overwrite_and_skip_return_candidate() {
     let dst_dir = td.path();
     fs::write(dst_dir.join("thing.bin"), b"x").unwrap();
     let name = OsStr::new("thing.bin");
-    assert_eq!(resolve_destination(dst_dir, name, OnDuplicate::Overwrite), dst_dir.join("thing.bin"));
-    assert_eq!(resolve_destination(dst_dir, name, OnDuplicate::Skip), dst_dir.join("thing.bin"));
+    assert_eq!(
+        resolve_destination(dst_dir, name, OnDuplicate::Overwrite),
+        dst_dir.join("thing.bin")
+    );
+    assert_eq!(
+        resolve_destination(dst_dir, name, OnDuplicate::Skip),
+        dst_dir.join("thing.bin")
+    );
 }

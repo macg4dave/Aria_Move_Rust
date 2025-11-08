@@ -1,8 +1,8 @@
+use crate::shutdown;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use tracing::debug;
-use crate::shutdown;
 
 /// Return a unique destination by appending timestamp+pid when candidate exists.
 /// - Preserves non-UTF8 names (uses OsString).
@@ -162,10 +162,10 @@ pub(crate) fn stable_file_probe(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
+    use serial_test::serial;
     use std::io::Write;
     use std::thread;
-    use serial_test::serial;
+    use tempfile::tempdir;
 
     #[test]
     fn unique_destination_same_when_absent() {

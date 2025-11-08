@@ -6,7 +6,8 @@ use tempfile::tempdir;
 /// Create a file with the given content and fsync it (to avoid flakiness in tests).
 fn create_file_with_content(path: &std::path::Path, content: &str) {
     let mut f = fs::File::create(path).expect("create source file");
-    f.write_all(content.as_bytes()).expect("write source content");
+    f.write_all(content.as_bytes())
+        .expect("write source content");
     f.sync_all().expect("sync source file");
 }
 

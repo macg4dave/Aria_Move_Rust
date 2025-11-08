@@ -38,7 +38,9 @@ pub fn resolve_destination(dst_dir: &Path, name: &OsStr, policy: OnDuplicate) ->
         OnDuplicate::Skip | OnDuplicate::Overwrite => candidate,
         OnDuplicate::RenameWithSuffix => {
             // Do not suffix our own internal transient names; keep them as-is.
-            if let Some(s) = name.to_str() && s.starts_with(".aria_move.") {
+            if let Some(s) = name.to_str()
+                && s.starts_with(".aria_move.")
+            {
                 return candidate;
             }
             // Path-length awareness: first, ensure the base name (without suffix) fits.
@@ -139,7 +141,7 @@ fn build_name_with_suffix(stem: &OsStr, ext: Option<&OsStr>, suffix: &str) -> Os
     let name_len = name_len_units(&stem_os) + overhead;
     if name_len > MAX_FILENAME_LEN {
         // Need to shrink stem to fit
-    let budget = MAX_FILENAME_LEN.saturating_sub(overhead);
+        let budget = MAX_FILENAME_LEN.saturating_sub(overhead);
         if budget == 0 {
             // Pathologically small budget; fall back to minimal marker
             stem_os = OsString::from("f");
@@ -180,7 +182,9 @@ fn build_name_with_suffix(stem: &OsStr, ext: Option<&OsStr>, suffix: &str) -> Os
                             break;
                         }
                     }
-                    if acc.is_empty() { acc.push('f'); }
+                    if acc.is_empty() {
+                        acc.push('f');
+                    }
                     stem_os = OsString::from(acc);
                 }
             }
@@ -189,7 +193,9 @@ fn build_name_with_suffix(stem: &OsStr, ext: Option<&OsStr>, suffix: &str) -> Os
 
     let mut new_name = OsString::new();
     new_name.push(&stem_os);
-    if !suffix.is_empty() { new_name.push(suffix); }
+    if !suffix.is_empty() {
+        new_name.push(suffix);
+    }
     new_name.push(&ext_part);
     new_name
 }

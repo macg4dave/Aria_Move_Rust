@@ -19,7 +19,10 @@ fn resume_temp_path(dest: &Path) -> std::path::PathBuf {
     dest.to_string_lossy().hash(&mut hasher);
     let h = hasher.finish();
     let name = format!(".aria_move.resume.{:016x}.tmp", h);
-    match dest.parent() { Some(p) => p.join(name), None => name.into() }
+    match dest.parent() {
+        Some(p) => p.join(name),
+        None => name.into(),
+    }
 }
 
 #[test]
@@ -37,7 +40,9 @@ fn resumes_partial_file_copy_and_finalizes() -> Result<(), Box<dyn std::error::E
     let tmp = resume_temp_path(&dest);
 
     // Pre-create partial temp file with first half of content
-    if let Some(parent) = tmp.parent() { fs::create_dir_all(parent)?; }
+    if let Some(parent) = tmp.parent() {
+        fs::create_dir_all(parent)?;
+    }
     let mut f = fs::File::create(&tmp)?;
     let half = content.len() / 2;
     f.write_all(&content[..half])?;

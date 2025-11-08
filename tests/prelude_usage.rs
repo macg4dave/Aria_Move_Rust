@@ -9,7 +9,8 @@ fn prelude_exports_expected_items() {
     let _err = Error::Interrupted;
     // Functions compile; we won't invoke them (would need real paths)
     // Use type inference to ensure signatures are visible.
-    let _resolve_fn: fn(&Config, Option<&std::path::Path>) -> AMResult<std::path::PathBuf> = resolve_source_path;
+    let _resolve_fn: fn(&Config, Option<&std::path::Path>) -> AMResult<std::path::PathBuf> =
+        resolve_source_path;
     let _move_fn: fn(&Config, &std::path::Path) -> AMResult<std::path::PathBuf> = move_entry;
     // Helpers re-exported in prelude
     let _ = default_config_path();

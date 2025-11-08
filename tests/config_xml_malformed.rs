@@ -1,4 +1,6 @@
-use std::fs; use tempfile::tempdir; use aria_move::load_config_from_xml_path;
+use aria_move::load_config_from_xml_path;
+use std::fs;
+use tempfile::tempdir;
 
 #[test]
 fn malformed_xml_errors() {

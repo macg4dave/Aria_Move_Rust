@@ -1,14 +1,21 @@
 #[cfg(unix)]
 mod unix_quoted {
-    use std::fs;use std::process::Command;use tempfile::tempdir;use assert_cmd::cargo;
+    use assert_cmd::cargo;
+    use std::fs;
+    use std::process::Command;
+    use tempfile::tempdir;
 
     fn write_cfg(path: &std::path::Path, download: &std::path::Path, completed: &std::path::Path) {
-        let xml = format!(r#"<config>
+        let xml = format!(
+            r#"<config>
   <download_base>{}</download_base>
   <completed_base>{}</completed_base>
   <log_level>quiet</log_level>
   <preserve_metadata>false</preserve_metadata>
-</config>"#, download.display(), completed.display());
+</config>"#,
+            download.display(),
+            completed.display()
+        );
         fs::write(path, xml).unwrap();
     }
 
@@ -39,7 +46,11 @@ mod unix_quoted {
             .output()
             .expect("spawn binary");
 
-        assert!(out.status.success(), "expected success; stderr: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "expected success; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         let dest_dir = completed.join("New folder");
         assert!(dest_dir.exists());
         assert!(dest_dir.join("x.txt").exists());
@@ -68,7 +79,11 @@ mod unix_quoted {
             .output()
             .expect("spawn binary");
 
-        assert!(out.status.success(), "expected success; stderr: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "expected success; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         let dest = completed.join("with space.bin");
         assert!(dest.exists());
         assert!(!src.exists());
@@ -98,7 +113,11 @@ mod unix_quoted {
             .output()
             .expect("spawn binary");
 
-        assert!(out.status.success(), "expected quoted single arg directory move success; stderr: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "expected quoted single arg directory move success; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         let dest = completed.join("Quoted Dir");
         assert!(dest.exists(), "dest directory should exist");
         assert!(dest.join("a.txt").exists(), "inner file should move");

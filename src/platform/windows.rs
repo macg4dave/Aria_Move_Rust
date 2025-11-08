@@ -6,13 +6,13 @@
 //! - Config writes are done via temp + rename to be atomic.
 //! - Disk space query uses GetDiskFreeSpaceExW.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use windows_sys::Win32::Storage::FileSystem::{
-    GetDiskFreeSpaceExW, GetFileAttributesW, SetFileAttributesW, DeleteFileW,
-    FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_TEMPORARY,
+    DeleteFileW, FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_TEMPORARY, GetDiskFreeSpaceExW,
+    GetFileAttributesW, SetFileAttributesW,
 };
 
 /// Open a log file for appending (best-effort; no ACL changes). Ensures the file exists.
@@ -54,7 +54,8 @@ pub fn write_config_secure_new_0600(path: &Path, contents: &[u8]) -> anyhow::Res
 
     if let Err(e) = fs::rename(&tmp, path) {
         let _ = fs::remove_file(&tmp);
-        return Err(e).with_context(|| format!("rename '{}' -> '{}'", tmp.display(), path.display()));
+        return Err(e)
+            .with_context(|| format!("rename '{}' -> '{}'", tmp.display(), path.display()));
     }
     Ok(())
 }
@@ -92,8 +93,17 @@ pub fn check_disk_space(path: &std::path::Path) -> std::io::Result<u64> {
     let mut free_avail: u64 = 0;
     let mut _total: u64 = 0;
     let mut _total_free: u64 = 0;
-    let ok = unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut free_avail, &mut _total, &mut _total_free) };
-    if ok == 0 { return Err(io::Error::last_os_error()); }
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut free_avail,
+            &mut _total,
+            &mut _total_free,
+        )
+    };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
     Ok(free_avail)
 }
 
@@ -102,7 +112,10 @@ fn tmp_sibling_name(target: &Path) -> PathBuf {
     use std::time::{SystemTime, UNIX_EPOCH};
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let pid = std::process::id();
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
     let seq = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let name = format!(".aria_move.config.tmp.{pid}.{nanos}.{seq}");
     target.parent().unwrap_or_else(|| Path::new(".")).join(name)
@@ -113,7 +126,8 @@ fn mark_temp_attribute(p: &Path) {
     if let Some(wide) = to_wide(p) {
         unsafe {
             let current = GetFileAttributesW(wide.as_ptr());
-            if current != u32::MAX { // INVALID_FILE_ATTRIBUTES
+            if current != u32::MAX {
+                // INVALID_FILE_ATTRIBUTES
                 let new_attr = current | FILE_ATTRIBUTE_TEMPORARY;
                 let _ = SetFileAttributesW(wide.as_ptr(), new_attr);
             }
@@ -136,7 +150,9 @@ fn clear_readonly_attribute(p: &Path) {
 #[allow(dead_code)]
 fn delete_file_best_effort(p: &Path) {
     if let Some(wide) = to_wide(p) {
-        unsafe { let _ = DeleteFileW(wide.as_ptr()); }
+        unsafe {
+            let _ = DeleteFileW(wide.as_ptr());
+        }
     }
 }
 
@@ -175,14 +191,22 @@ mod tests {
         for entry in fs::read_dir(dir.path()).unwrap() {
             let p = entry.unwrap().path();
             let name = p.file_name().unwrap().to_string_lossy();
-            assert!(!name.starts_with(".aria_move.config.tmp."), "leftover temp file: {}", name);
+            assert!(
+                !name.starts_with(".aria_move.config.tmp."),
+                "leftover temp file: {}",
+                name
+            );
         }
         // Ensure file isn't read-only (best-effort check)
         if let Some(wide) = to_wide(&cfg) {
             unsafe {
                 let attrs = GetFileAttributesW(wide.as_ptr());
                 assert_ne!(attrs, u32::MAX);
-                assert_eq!(attrs & FILE_ATTRIBUTE_READONLY, 0, "config file unexpectedly read-only");
+                assert_eq!(
+                    attrs & FILE_ATTRIBUTE_READONLY,
+                    0,
+                    "config file unexpectedly read-only"
+                );
             }
         }
     }

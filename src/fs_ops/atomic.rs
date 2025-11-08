@@ -39,7 +39,10 @@ pub fn try_atomic_move(src: &Path, dst: &Path) -> Result<MoveOutcome> {
                 // If not found, ignore; otherwise return enriched error.
                 if e.kind() != std::io::ErrorKind::NotFound {
                     return Err(e).with_context(|| {
-                        format!("remove existing destination before rename: {}", dst.display())
+                        format!(
+                            "remove existing destination before rename: {}",
+                            dst.display()
+                        )
                     });
                 }
             }
@@ -54,7 +57,9 @@ pub fn try_atomic_move(src: &Path, dst: &Path) -> Result<MoveOutcome> {
     #[cfg(unix)]
     {
         // Ignore fsync errors to avoid turning a successful rename into a failure.
-        if let Some(dst_parent) = dst.parent() && let Err(e) = super::util::fsync_dir(dst_parent) {
+        if let Some(dst_parent) = dst.parent()
+            && let Err(e) = super::util::fsync_dir(dst_parent)
+        {
             debug!(error = %e, dir = %dst_parent.display(), "best-effort fsync(dst_parent) failed");
         }
         if let (Some(src_parent), Some(dst_parent)) = (src.parent(), dst.parent())

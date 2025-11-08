@@ -2,12 +2,12 @@
 //! - Config holds runtime settings with sensible defaults.
 //! - LogLevel represents verbosity with simple parsing helpers.
 
-use std::path::PathBuf;
 use std::fmt;
+use std::path::PathBuf;
 use std::str::FromStr;
 
-use super::{COMPLETED_BASE_DEFAULT, DOWNLOAD_BASE_DEFAULT};
 use super::paths;
+use super::{COMPLETED_BASE_DEFAULT, DOWNLOAD_BASE_DEFAULT};
 
 /// Program-defined verbosity levels exposed to users/config.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -95,10 +95,7 @@ impl Default for Config {
 
 impl Config {
     /// Construct a Config with explicit bases; other fields use defaults.
-    pub fn new(
-        download_base: impl Into<PathBuf>,
-        completed_base: impl Into<PathBuf>,
-    ) -> Self {
+    pub fn new(download_base: impl Into<PathBuf>, completed_base: impl Into<PathBuf>) -> Self {
         Self {
             download_base: download_base.into(),
             completed_base: completed_base.into(),

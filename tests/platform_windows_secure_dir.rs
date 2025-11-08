@@ -1,8 +1,8 @@
 #![cfg(windows)]
 
-use tempfile::tempdir;
-use std::fs::{self, File};
 use aria_move::platform::ensure_secure_directory;
+use std::fs::{self, File};
+use tempfile::tempdir;
 
 #[test]
 fn windows_ensure_secure_directory_accepts_dir_and_rejects_file_or_readonly() {

@@ -1,12 +1,19 @@
-use std::fs;use std::process::Command;use tempfile::tempdir;use assert_cmd::cargo;
+use assert_cmd::cargo;
+use std::fs;
+use std::process::Command;
+use tempfile::tempdir;
 
 fn write_cfg(path: &std::path::Path, download: &std::path::Path, completed: &std::path::Path) {
-    let xml = format!(r#"<config>
+    let xml = format!(
+        r#"<config>
   <download_base>{}</download_base>
   <completed_base>{}</completed_base>
   <log_level>quiet</log_level>
   <preserve_metadata>false</preserve_metadata>
-</config>"#, download.display(), completed.display());
+</config>"#,
+        download.display(),
+        completed.display()
+    );
     fs::write(path, xml).unwrap();
 }
 
@@ -33,7 +40,10 @@ fn non_numeric_num_files_is_rejected_by_cli() {
     assert!(!out.status.success(), "expected parse failure");
     let stderr = String::from_utf8_lossy(&out.stderr);
     // clap typically reports invalid value errors
-    assert!(stderr.contains("invalid value") || stderr.contains("error:"), "stderr did not report invalid value: {stderr}");
+    assert!(
+        stderr.contains("invalid value") || stderr.contains("error:"),
+        "stderr did not report invalid value: {stderr}"
+    );
 }
 
 #[test]
@@ -59,5 +69,8 @@ fn too_many_args_are_rejected_by_cli() {
 
     assert!(!out.status.success(), "expected clap to reject extra args");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("unexpected") || stderr.contains("Usage") || stderr.contains("error:"), "stderr did not indicate too many args: {stderr}");
+    assert!(
+        stderr.contains("unexpected") || stderr.contains("Usage") || stderr.contains("error:"),
+        "stderr did not indicate too many args: {stderr}"
+    );
 }

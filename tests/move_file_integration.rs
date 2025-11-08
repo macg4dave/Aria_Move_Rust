@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::Path;
 
 use aria_move::Config;
-use filetime::{set_file_mtime, FileTime}; // both used; keep
+use filetime::{FileTime, set_file_mtime}; // both used; keep
 use tempfile::tempdir;
 
 /// Create a file with the given content and fsync it (reduces test flakiness).
@@ -11,7 +11,11 @@ fn write_file(path: &Path, contents: &str) {
     let mut f = fs::File::create(path).expect("create source file");
     write!(f, "{}", contents).expect("write source content");
     f.sync_all().expect("sync source file");
-    assert!(path.exists(), "file should exist immediately after creation: {}", path.display());
+    assert!(
+        path.exists(),
+        "file should exist immediately after creation: {}",
+        path.display()
+    );
 }
 
 /// Build a Config with provided bases and flags.
@@ -61,7 +65,8 @@ fn move_file_dry_run_does_nothing() -> Result<(), Box<dyn std::error::Error>> {
     let src = download.path().join("dry_run.txt");
     write_file(&src, "dry run");
 
-    let dest = aria_move::fs_ops::move_file(&cfg, &src).expect("move_file (dry-run) should return Ok");
+    let dest =
+        aria_move::fs_ops::move_file(&cfg, &src).expect("move_file (dry-run) should return Ok");
 
     assert!(src.exists(), "source should still exist with dry-run");
     assert!(

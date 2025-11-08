@@ -11,8 +11,8 @@
 //! - We refuse file logging if any ancestor of the file path is a symlink.
 
 use anyhow::Result;
-use aria_move::{path_has_symlink_ancestor, LogLevel, default_log_path};
 use aria_move::output as out;
+use aria_move::{LogLevel, default_log_path, path_has_symlink_ancestor};
 use chrono::Local;
 use std::fmt as stdfmt;
 use std::path::Path;
@@ -164,7 +164,10 @@ pub fn init_tracing(
             path.display()
         ));
         if let Ok(def) = default_log_path() {
-            out::print_info(&format!("You can try using the default log path instead: {}", def.display()));
+            out::print_info(&format!(
+                "You can try using the default log path instead: {}",
+                def.display()
+            ));
         }
     }
 

@@ -1,11 +1,11 @@
 //! Unix (non-macOS) implementations of platform helpers.
 
+use super::common_unix::atomic_write_0600;
 use anyhow::Result;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
-use super::common_unix::atomic_write_0600;
 
 /// Open log file for appending with 0600 permissions.
 pub fn open_log_file_secure_append(path: &Path) -> io::Result<File> {
@@ -29,7 +29,9 @@ pub fn open_log_file_secure_append(path: &Path) -> io::Result<File> {
 }
 
 /// Write config atomically: temp file (0600) + fsync + rename + fsync dir.
-pub fn write_config_secure_new_0600(path: &Path, contents: &[u8]) -> Result<()> { atomic_write_0600(path, contents) }
+pub fn write_config_secure_new_0600(path: &Path, contents: &[u8]) -> Result<()> {
+    atomic_write_0600(path, contents)
+}
 
 /// POSIX chmod 0700 for directories.
 pub fn set_dir_mode_0700(path: &Path) -> io::Result<()> {
@@ -101,7 +103,11 @@ mod tests {
         for entry in fs::read_dir(dir.path()).unwrap() {
             let p = entry.unwrap().path();
             let name = p.file_name().unwrap().to_string_lossy();
-            assert!(!name.starts_with(".aria_move.config.tmp."), "leftover temp file: {}", name);
+            assert!(
+                !name.starts_with(".aria_move.config.tmp."),
+                "leftover temp file: {}",
+                name
+            );
         }
     }
 

@@ -1,8 +1,8 @@
 #![cfg(windows)]
 
-use tempfile::tempdir;
-use std::io::Write;
 use aria_move::platform::open_log_file_secure_append;
+use std::io::Write;
+use tempfile::tempdir;
 
 #[test]
 fn windows_open_log_file_allows_append_and_writes() {

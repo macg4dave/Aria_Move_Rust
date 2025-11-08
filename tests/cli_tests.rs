@@ -1,5 +1,5 @@
-use aria_move::config::types::{Config, LogLevel};
 use aria_move::cli::Args;
+use aria_move::config::types::{Config, LogLevel};
 use clap::Parser;
 use std::path::PathBuf;
 

@@ -76,7 +76,11 @@ pub(super) fn copy_streaming_ex(
                     let f = File::options().read(true).write(false).open(dst)?;
                     f.sync_all()?;
                 }
-                return Ok(CopyResult { bytes, buf_size: BUF_SIZE, mode });
+                return Ok(CopyResult {
+                    bytes,
+                    buf_size: BUF_SIZE,
+                    mode,
+                });
             } else {
                 // On errors like EXDEV/ENOTSUP/EPERM fall through to streaming; EEXIST should be
                 // impossible here since we always choose a unique temp name in higher layers.
@@ -130,7 +134,11 @@ pub(super) fn copy_streaming_ex(
                 if matches!(mode, DurabilityMode::Full) {
                     dst_f.sync_all()?;
                 }
-                return Ok(CopyResult { bytes: total, buf_size: BUF_SIZE, mode });
+                return Ok(CopyResult {
+                    bytes: total,
+                    buf_size: BUF_SIZE,
+                    mode,
+                });
             } else {
                 // Error; if no bytes copied and error indicates unsupported, fall back.
                 let err = io::Error::last_os_error();
@@ -167,7 +175,11 @@ pub(super) fn copy_streaming_ex(
         writer.get_ref().sync_all()?;
     }
 
-    Ok(CopyResult { bytes, buf_size: BUF_SIZE, mode })
+    Ok(CopyResult {
+        bytes,
+        buf_size: BUF_SIZE,
+        mode,
+    })
 }
 
 /// Resume variant: append remaining bytes to an existing temp file that is smaller than the source.
@@ -177,11 +189,18 @@ pub(super) fn copy_streaming_resume(src: &Path, dst: &Path, offset: u64) -> io::
     let src_f = File::open(src)?;
     let src_meta = src_f.metadata()?;
     let total = src_meta.len();
-    if offset >= total { return Ok(offset); }
+    if offset >= total {
+        return Ok(offset);
+    }
 
     let mut dst_f = OpenOptions::new().write(true).read(true).open(dst)?;
     let cur_len = dst_f.metadata()?.len();
-    if cur_len != offset { return Err(io::Error::new(io::ErrorKind::InvalidInput, "resume offset mismatch")); }
+    if cur_len != offset {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "resume offset mismatch",
+        ));
+    }
 
     // Seek source to offset and destination to end.
     let mut reader = BufReader::new(src_f);

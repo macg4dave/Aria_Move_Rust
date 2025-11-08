@@ -1,12 +1,19 @@
-use std::fs;use std::process::Command;use tempfile::tempdir;use assert_cmd::cargo;
+use assert_cmd::cargo;
+use std::fs;
+use std::process::Command;
+use tempfile::tempdir;
 
 fn write_cfg(path: &std::path::Path, download: &std::path::Path, completed: &std::path::Path) {
-    let xml = format!(r#"<config>
+    let xml = format!(
+        r#"<config>
   <download_base>{}</download_base>
   <completed_base>{}</completed_base>
   <log_level>quiet</log_level>
   <preserve_metadata>false</preserve_metadata>
-</config>"#, download.display(), completed.display());
+</config>"#,
+        download.display(),
+        completed.display()
+    );
     fs::write(path, xml).unwrap();
 }
 
@@ -32,7 +39,11 @@ fn single_arg_bare_filename_moves_from_download_base() {
         .output()
         .expect("spawn binary");
 
-    assert!(out.status.success(), "expected success; stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "expected success; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let dest = completed.join(fname);
     assert!(dest.exists());
     assert!(!src.exists());

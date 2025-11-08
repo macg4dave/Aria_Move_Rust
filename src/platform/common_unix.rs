@@ -37,10 +37,12 @@ pub fn atomic_write_0600(path: &Path, contents: &[u8]) -> Result<()> {
 
     if let Err(e) = fs::rename(&tmp, path) {
         let _ = fs::remove_file(&tmp);
-        return Err(e).with_context(|| format!("rename '{}' -> '{}'", tmp.display(), path.display()));
+        return Err(e)
+            .with_context(|| format!("rename '{}' -> '{}'", tmp.display(), path.display()));
     }
 
-    let dir_file = File::open(parent).with_context(|| format!("open dir '{}'", parent.display()))?;
+    let dir_file =
+        File::open(parent).with_context(|| format!("open dir '{}'", parent.display()))?;
     dir_file.sync_all().context("fsync parent dir")?;
     Ok(())
 }

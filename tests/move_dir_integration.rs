@@ -7,11 +7,17 @@ use tempfile::tempdir;
 
 /// Create a file with the given content and fsync it (reduces test flakiness).
 fn write_file(path: &Path, contents: &str) {
-    if let Some(parent) = path.parent() { fs::create_dir_all(parent).expect("create parent dirs"); }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("create parent dirs");
+    }
     let mut f = fs::File::create(path).expect("create file");
     write!(f, "{}", contents).expect("write content");
     f.sync_all().expect("sync file");
-    assert!(path.exists(), "file should exist immediately: {}", path.display());
+    assert!(
+        path.exists(),
+        "file should exist immediately: {}",
+        path.display()
+    );
 }
 
 /// Build a Config with provided bases and flags.
@@ -48,7 +54,11 @@ fn move_dir_happy_path_nested() -> Result<(), Box<dyn std::error::Error>> {
 
     // Source dir removed; destination directory exists
     assert!(!src_dir.exists(), "source directory should be removed");
-    assert!(dest.exists(), "destination directory should exist: {}", dest.display());
+    assert!(
+        dest.exists(),
+        "destination directory should exist: {}",
+        dest.display()
+    );
 
     // Files should exist under destination with same relative layout and contents
     let d1 = dest.join("track1.flac");
@@ -72,7 +82,8 @@ fn move_dir_dry_run_does_nothing() -> Result<(), Box<dyn std::error::Error>> {
     let f = src_dir.join("img.jpg");
     write_file(&f, "jpgdata");
 
-    let dest = aria_move::fs_ops::move_dir(&cfg, &src_dir).expect("move_dir dry-run should return Ok");
+    let dest =
+        aria_move::fs_ops::move_dir(&cfg, &src_dir).expect("move_dir dry-run should return Ok");
 
     // With dry-run, no changes on disk
     assert!(src_dir.exists(), "source directory should still exist");

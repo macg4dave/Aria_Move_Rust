@@ -21,7 +21,7 @@
 //! - Support XDG overrides (`XDG_CONFIG_HOME`, `XDG_DATA_HOME`).
 //! - Distinguish when `ARIA_MOVE_CONFIG` points to a directory (append `config.xml`).
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use dirs::{config_dir, data_dir};
 use std::fs;
 use std::io;
@@ -44,13 +44,19 @@ pub fn default_config_path() -> Result<PathBuf> {
         let candidate = PathBuf::from(&over);
         let resolved = if candidate.is_relative() {
             std::env::current_dir()
-                .context("Failed to get current working directory while resolving ARIA_MOVE_CONFIG")?
+                .context(
+                    "Failed to get current working directory while resolving ARIA_MOVE_CONFIG",
+                )?
                 .join(candidate)
         } else {
             candidate
         };
         // If the override points to a directory, append config.xml
-        if resolved.is_dir() || resolved.to_string_lossy().ends_with(std::path::MAIN_SEPARATOR) {
+        if resolved.is_dir()
+            || resolved
+                .to_string_lossy()
+                .ends_with(std::path::MAIN_SEPARATOR)
+        {
             return Ok(resolved.join("config.xml"));
         }
         return Ok(resolved);
@@ -61,7 +67,8 @@ pub fn default_config_path() -> Result<PathBuf> {
     }
 
     // HOME fallback (platform-specific). We attempt a Windows-specific layout if on Windows.
-    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
         .ok_or_else(|| anyhow!("HOME/USERPROFILE not set for config fallback"))?;
     let home_path = PathBuf::from(home);
     if cfg!(windows) {
@@ -72,7 +79,10 @@ pub fn default_config_path() -> Result<PathBuf> {
             .join("aria_move")
             .join("config.xml"));
     }
-    Ok(home_path.join(".config").join("aria_move").join("config.xml"))
+    Ok(home_path
+        .join(".config")
+        .join("aria_move")
+        .join("config.xml"))
 }
 
 /// Return the default log file path as a PathBuf.
@@ -80,7 +90,9 @@ pub fn default_config_path() -> Result<PathBuf> {
 /// If that is unavailable, falls back to $HOME/.local/share/aria_move/aria_move.log.
 pub fn default_log_path() -> Result<PathBuf> {
     // 1) Colocate with config
-    if let Ok(cfg_path) = default_config_path() && cfg_path.parent().is_some() {
+    if let Ok(cfg_path) = default_config_path()
+        && cfg_path.parent().is_some()
+    {
         return Ok(cfg_path.parent().unwrap().join("aria_move.log"));
     }
 
@@ -90,7 +102,8 @@ pub fn default_log_path() -> Result<PathBuf> {
     }
 
     // 3) HOME fallback (platform specific)
-    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
         .ok_or_else(|| anyhow!("HOME/USERPROFILE not set for log fallback"))?;
     let home_path = PathBuf::from(home);
     if cfg!(windows) {

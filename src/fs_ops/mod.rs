@@ -14,29 +14,29 @@ mod atomic;
 mod claim;
 mod copy;
 mod dir_move;
+mod duplicate;
 mod entry;
 mod file_move;
-mod duplicate;
+mod helpers;
 mod io_copy;
 mod lock;
 mod metadata;
 mod resolve;
 mod space;
 mod util;
-mod helpers;
 
 //
 // Public API (re-exported)
 //
+pub use atomic::{MoveOutcome, try_atomic_move}; // exposed for targeted tests & outcome usage
 pub use copy::{safe_copy_and_rename, safe_copy_and_rename_with_metadata};
 pub use dir_move::move_dir;
+pub use duplicate::{OnDuplicate, resolve_destination};
 pub use entry::move_entry;
 pub use file_move::move_file;
-pub use resolve::resolve_source_path;
-pub use atomic::{try_atomic_move, MoveOutcome}; // exposed for targeted tests & outcome usage
-pub use duplicate::{resolve_destination, OnDuplicate};
 pub use helpers::{io_error_with_help, io_error_with_help_io};
 pub use metadata::{preserve_metadata, preserve_xattrs};
+pub use resolve::resolve_source_path;
 
 // Locking API (currently considered advanced; subject to change)
-pub use lock::{acquire_dir_lock, acquire_move_lock, try_acquire_dir_lock, DirLock};
+pub use lock::{DirLock, acquire_dir_lock, acquire_move_lock, try_acquire_dir_lock};

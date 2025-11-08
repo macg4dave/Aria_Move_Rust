@@ -16,7 +16,7 @@
 //! Potential future enhancements:
 //! - Make cushion configurable from a higher-level config.
 //! - Add an error variant instead of generic anyhow.
-//! - Expose raw bytes in error metadata (already embedded via formatting). 
+//! - Expose raw bytes in error metadata (already embedded via formatting).
 
 use crate::errors::AriaMoveError;
 use std::io;
@@ -45,7 +45,7 @@ pub(super) fn format_bytes(n: u64) -> String {
     };
     let formatted = format!("{:.1}", value);
     let trimmed = if formatted.ends_with(".0") {
-        &formatted[..formatted.len()-2]
+        &formatted[..formatted.len() - 2]
     } else {
         &formatted
     };
@@ -75,12 +75,11 @@ pub(super) fn ensure_space_for_copy(dst_dir: &Path, required: u64) -> Result<(),
         dst_dir // Exists but not directory (caller may have passed file path); use its parent if present.
     };
 
-    let free = free_space_bytes(query_path)
-        .map_err(|_| AriaMoveError::InsufficientSpace {
-            required: (required as u128).saturating_add(SPACE_CUSHION_BYTES as u128),
-            available: 0u128,
-            dest: query_path.to_path_buf(),
-        })?;
+    let free = free_space_bytes(query_path).map_err(|_| AriaMoveError::InsufficientSpace {
+        required: (required as u128).saturating_add(SPACE_CUSHION_BYTES as u128),
+        available: 0u128,
+        dest: query_path.to_path_buf(),
+    })?;
     if !has_space(free, required) {
         return Err(AriaMoveError::InsufficientSpace {
             required: (required as u128).saturating_add(SPACE_CUSHION_BYTES as u128),
@@ -106,7 +105,11 @@ pub(super) fn free_space_bytes(path: &Path) -> io::Result<u64> {
     }
 
     // On some platforms (e.g., older macOS), f_frsize may be 0; fall back to f_bsize.
-    let block_size = if s.f_frsize != 0 { s.f_frsize } else { s.f_bsize } as u64;
+    let block_size = if s.f_frsize != 0 {
+        s.f_frsize
+    } else {
+        s.f_bsize
+    } as u64;
     Ok((s.f_bavail as u64).saturating_mul(block_size))
 }
 
@@ -181,7 +184,11 @@ mod tests {
 
     // Helper to exercise the error path deterministically without relying on actual disk space.
     #[track_caller]
-    fn simulate_insufficient(query_path: &Path, free: u64, required: u64) -> Result<(), AriaMoveError> {
+    fn simulate_insufficient(
+        query_path: &Path,
+        free: u64,
+        required: u64,
+    ) -> Result<(), AriaMoveError> {
         if !has_space(free, required) {
             return Err(AriaMoveError::InsufficientSpace {
                 required: (required as u128).saturating_add(SPACE_CUSHION_BYTES as u128),
@@ -201,7 +208,11 @@ mod tests {
         let required = 1u64;
         let err = simulate_insufficient(&prospective, free, required).unwrap_err();
         match err {
-            AriaMoveError::InsufficientSpace { required: need, available, dest } => {
+            AriaMoveError::InsufficientSpace {
+                required: need,
+                available,
+                dest,
+            } => {
                 assert_eq!(need, (required as u128) + (SPACE_CUSHION_BYTES as u128));
                 assert_eq!(available, free as u128);
                 assert_eq!(dest, prospective);

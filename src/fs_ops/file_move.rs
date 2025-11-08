@@ -6,7 +6,7 @@
 //! - Per-source lock to prevent double-processing of the same item
 //! - Per-destination-base lock to serialize finalization inside completed_base
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use std::fs::{self};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -19,10 +19,10 @@ use crate::platform::check_disk_space;
 use crate::shutdown;
 use crate::utils::{ensure_not_base, stable_file_probe, unique_destination};
 
-use super::atomic::{try_atomic_move, MoveOutcome};
+use super::atomic::{MoveOutcome, try_atomic_move};
 use super::copy::safe_copy_and_rename_with_metadata;
-use super::lock::{acquire_dir_lock, acquire_move_lock};
 use super::io_error_with_help;
+use super::lock::{acquire_dir_lock, acquire_move_lock};
 use super::metadata;
 
 /// Move a single file into `completed_base`.
@@ -146,13 +146,15 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
     // Remove original after successful copy into place.
     match fs::remove_file(src) {
         Ok(()) => {}
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {/* already gone; ignore */}
-    Err(e) => return Err(io_error_with_help("remove original file", src)(e)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => { /* already gone; ignore */ }
+        Err(e) => return Err(io_error_with_help("remove original file", src)(e)),
     }
 
     // Best-effort fsync of the source parent to persist the deletion on Unix.
     #[cfg(unix)]
-    if let Some(src_parent) = src.parent() && let Err(e) = super::util::fsync_dir(src_parent) {
+    if let Some(src_parent) = src.parent()
+        && let Err(e) = super::util::fsync_dir(src_parent)
+    {
         warn!(error = %e, dir = %src_parent.display(), "best-effort fsync(src_parent after delete) failed");
     }
 

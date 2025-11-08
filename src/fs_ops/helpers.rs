@@ -48,13 +48,17 @@ fn build_message(op: &str, path: &Path, e: &io::Error) -> String {
                     msg.push_str(" — read-only filesystem; cannot write here.");
                 }
                 libc::ELOOP => {
-                    msg.push_str(" — too many symbolic link levels (ELOOP); possible symlink cycle.");
+                    msg.push_str(
+                        " — too many symbolic link levels (ELOOP); possible symlink cycle.",
+                    );
                 }
                 libc::ENAMETOOLONG => {
                     msg.push_str(" — filename or path too long; shorten path segments.");
                 }
                 libc::EMFILE => {
-                    msg.push_str(" — process file descriptor limit reached; close files or raise limits.");
+                    msg.push_str(
+                        " — process file descriptor limit reached; close files or raise limits.",
+                    );
                 }
                 libc::ENFILE => {
                     msg.push_str(" — system-wide file table overflow; reduce open files.");
@@ -66,13 +70,13 @@ fn build_message(op: &str, path: &Path, e: &io::Error) -> String {
         {
             // Common Win32 errors
             match code {
-                5 => msg.push_str(" — access denied; check permissions."),          // ERROR_ACCESS_DENIED
-                17 => msg.push_str(" — not same device; cross-filesystem move."),   // ERROR_NOT_SAME_DEVICE
-                32 => msg.push_str(" — sharing violation; file is in use."),        // ERROR_SHARING_VIOLATION
-                2 | 3 => msg.push_str(" — path not found; verify it exists."),      // FILE/ PATH NOT FOUND
-                80 => msg.push_str(" — already exists; pick a unique name."),       // ERROR_FILE_EXISTS
-                112 => msg.push_str(" — insufficient disk space."),                 // ERROR_DISK_FULL
-                19 => msg.push_str(" — write protected / read-only media."),        // ERROR_WRITE_PROTECT
+                5 => msg.push_str(" — access denied; check permissions."), // ERROR_ACCESS_DENIED
+                17 => msg.push_str(" — not same device; cross-filesystem move."), // ERROR_NOT_SAME_DEVICE
+                32 => msg.push_str(" — sharing violation; file is in use."), // ERROR_SHARING_VIOLATION
+                2 | 3 => msg.push_str(" — path not found; verify it exists."), // FILE/ PATH NOT FOUND
+                80 => msg.push_str(" — already exists; pick a unique name."),  // ERROR_FILE_EXISTS
+                112 => msg.push_str(" — insufficient disk space."),            // ERROR_DISK_FULL
+                19 => msg.push_str(" — write protected / read-only media."), // ERROR_WRITE_PROTECT
                 206 => msg.push_str(" — filename or path too long (MAX_PATH exceeded)."), // ERROR_FILENAME_EXCED_RANGE
                 4 => msg.push_str(" — too many open files; close handles or increase limit."), // ERROR_TOO_MANY_OPEN_FILES
                 _ => {}

@@ -1,5 +1,8 @@
 #![cfg(unix)]
-use std::fs; use std::os::unix::fs::PermissionsExt; use tempfile::tempdir; use aria_move::fs_ops::safe_copy_and_rename;
+use aria_move::fs_ops::safe_copy_and_rename;
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use tempfile::tempdir;
 
 #[test]
 fn tmp_is_cleaned_on_rename_failure() {

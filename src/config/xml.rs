@@ -51,7 +51,6 @@ type LoadedConfig = (
     bool,             // preserve_permissions
 );
 
-
 /// Read config from XML. OS-aware default path used if ARIA_MOVE_CONFIG not set.
 /// Returns None if no meaningful settings are present or the file doesn’t exist.
 pub fn load_config_from_xml() -> Option<LoadedConfig> {
@@ -106,13 +105,14 @@ pub fn load_config_from_xml() -> Option<LoadedConfig> {
         .log_level
         .as_deref()
         .and_then(|s| s.trim().parse::<LogLevel>().ok());
-    let log_file = parsed
-        .log_file
-        .as_deref()
-        .and_then(|s| {
-            let trimmed = s.trim();
-            if trimmed.is_empty() { None } else { Some(PathBuf::from(trimmed)) }
-        });
+    let log_file = parsed.log_file.as_deref().and_then(|s| {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(trimmed))
+        }
+    });
     let preserve_metadata = parsed.preserve_metadata.unwrap_or(false);
     let preserve_permissions = parsed.preserve_permissions.unwrap_or(false);
 
@@ -155,7 +155,8 @@ pub fn create_template_config(path: &Path) -> Result<()> {
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| "/path/to/aria_move.log".into());
 
-        let content = format!(r#"<!--
+    let content = format!(
+        r#"<!--
     aria_move configuration (XML)
 
     Boolean flags (true/false):
@@ -180,7 +181,9 @@ pub fn create_template_config(path: &Path) -> Result<()> {
     <preserve_metadata>false</preserve_metadata>
     <preserve_permissions>false</preserve_permissions>
 </config>
-"#, DOWNLOAD_BASE_DEFAULT, COMPLETED_BASE_DEFAULT, suggested_log);
+"#,
+        DOWNLOAD_BASE_DEFAULT, COMPLETED_BASE_DEFAULT, suggested_log
+    );
 
     // Atomic, secure write (O_NOFOLLOW + create_new on Unix), then tighten perms.
     write_config_secure_new_0600(path, content.as_bytes())?;
@@ -279,8 +282,14 @@ pub fn load_config_from_xml_env() -> Result<Option<Config>> {
     if let Some(p) = env::var_os("ARIA_MOVE_CONFIG") {
         eprintln!("[DEBUG] ARIA_MOVE_CONFIG is set to: {:?}", p);
         let cfg = load_config_from_xml_path(Path::new(&p))?;
-        eprintln!("[DEBUG] Loaded config - download_base: {}", cfg.download_base.display());
-        eprintln!("[DEBUG] Loaded config - completed_base: {}", cfg.completed_base.display());
+        eprintln!(
+            "[DEBUG] Loaded config - download_base: {}",
+            cfg.download_base.display()
+        );
+        eprintln!(
+            "[DEBUG] Loaded config - completed_base: {}",
+            cfg.completed_base.display()
+        );
         return Ok(Some(cfg));
     }
     eprintln!("[DEBUG] ARIA_MOVE_CONFIG not set, will use default config path");
