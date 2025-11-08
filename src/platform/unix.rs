@@ -1,10 +1,12 @@
-//! Unix (macOS/Linux) implementations of platform helpers.
+//! Unix (non-macOS) implementations of platform helpers.
 
 use anyhow::{Context, Result};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use super::temp::tmp_config_sibling_name;
+use super::common_unix::atomic_write_0600;
 
 /// Open log file for appending with 0600 permissions.
 pub fn open_log_file_secure_append(path: &Path) -> io::Result<File> {
@@ -28,35 +30,7 @@ pub fn open_log_file_secure_append(path: &Path) -> io::Result<File> {
 }
 
 /// Write config atomically: temp file (0600) + fsync + rename + fsync dir.
-pub fn write_config_secure_new_0600(path: &Path, contents: &[u8]) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "config path has no parent"))?;
-    fs::create_dir_all(parent).with_context(|| format!("create parent '{}'", parent.display()))?;
-
-    // Hidden sibling temp path (unique) next to target.
-    let tmp = tmp_sibling_name(path);
-
-    let mut f = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&tmp)
-        .with_context(|| format!("create temp '{}'", tmp.display()))?;
-    f.write_all(contents).context("write temp config")?;
-    f.sync_all().context("fsync temp config")?;
-    drop(f);
-
-    if let Err(e) = fs::rename(&tmp, path) {
-        // Best-effort cleanup of temp file on failure.
-        let _ = fs::remove_file(&tmp);
-        return Err(e).with_context(|| format!("rename '{}' -> '{}'", tmp.display(), path.display()));
-    }
-
-    let dir_file = File::open(parent).with_context(|| format!("open dir '{}'", parent.display()))?;
-    dir_file.sync_all().context("fsync parent dir")?;
-    Ok(())
-}
+pub fn write_config_secure_new_0600(path: &Path, contents: &[u8]) -> Result<()> { atomic_write_0600(path, contents) }
 
 /// POSIX chmod 0700 for directories.
 pub fn set_dir_mode_0700(path: &Path) -> io::Result<()> {
@@ -71,21 +45,12 @@ pub fn set_file_mode_0600(path: &Path) -> io::Result<()> {
 }
 
 /// Create a hidden sibling temp name for atomic writes.
-fn tmp_sibling_name(target: &Path) -> PathBuf {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let pid = std::process::id();
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-    // Add a simple counter to reduce collision risk in ultra-fast successive calls.
-    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let seq = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let name = format!(".aria_move.config.tmp.{pid}.{nanos}.{seq}");
-    target.parent().unwrap_or_else(|| Path::new(".")).join(name)
-}
+fn tmp_sibling_name(target: &Path) -> std::path::PathBuf { tmp_config_sibling_name(target) }
 
 /// Check available disk space at the given path (returns bytes available).
 /// Uses statvfs on Unix. Returns Ok(available_bytes) or an IO error.
 pub fn check_disk_space(path: &Path) -> io::Result<u64> {
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     {
         use std::ffi::CString;
         use std::mem::MaybeUninit;
@@ -101,7 +66,7 @@ pub fn check_disk_space(path: &Path) -> io::Result<u64> {
             Ok((stat.f_bavail as u64).saturating_mul(stat.f_bsize))
         }
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(target_os = "linux"))]
     {
         Ok(u64::MAX)
     }
