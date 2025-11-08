@@ -32,6 +32,15 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - name: Add Rust targets (Linux aarch64)
+        if: matrix.os == 'ubuntu-latest'
+        run: rustup target add aarch64-unknown-linux-gnu
+      - name: Install Linux cross toolchain (aarch64)
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Add Rust targets (macOS universal)
+        if: matrix.os == 'macos-latest'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
       - name: Install cargo-dist
         run: cargo install cargo-dist --locked
       - name: Determine tag
