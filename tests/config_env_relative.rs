@@ -33,7 +33,7 @@ fn relative_env_config_path_resolved() {
     fs::write(&src, "bin data").unwrap();
 
     let me = assert_cmd::cargo::cargo_bin!("aria_move");
-    let out = Command::new(&me)
+    let out = Command::new(me)
         .env("ARIA_MOVE_CONFIG", rel_cfg)
         .arg(&src)
         .output()

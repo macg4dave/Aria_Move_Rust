@@ -37,13 +37,13 @@ mod tests {
         assert_eq!(meta.permissions().mode() & 0o777, 0o640);
         let mtime = filetime::FileTime::from_last_modification_time(&meta);
         // Allow small differences, but it should be close to 'past' (within a few seconds)
-        let past_secs = ft.seconds();
-        let mt_secs = mtime.seconds();
-        assert!((mt_secs as i64 - past_secs as i64).abs() <= 5, "mtime not preserved sufficiently: got {} expected ~{}", mt_secs, past_secs);
+    let past_secs = ft.seconds();
+    let mt_secs = mtime.seconds();
+    assert!(mt_secs.abs_diff(past_secs) <= 5, "mtime not preserved sufficiently: got {} expected ~{}", mt_secs, past_secs);
 
         // Also verify atime preserved approximately
         let atime = filetime::FileTime::from_last_access_time(&meta);
-        let at_secs = atime.seconds();
-        assert!((at_secs as i64 - past_secs as i64).abs() <= 5, "atime not preserved sufficiently: got {} expected ~{}", at_secs, past_secs);
+    let at_secs = atime.seconds();
+    assert!(at_secs.abs_diff(past_secs) <= 5, "atime not preserved sufficiently: got {} expected ~{}", at_secs, past_secs);
     }
 }

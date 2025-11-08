@@ -35,7 +35,7 @@ fn single_positional_moves_file_to_completed() {
 
     // Run binary with single positional arg: <SOURCE_PATH>
     let me = assert_cmd::cargo::cargo_bin!("aria_move");
-    let out = Command::new(&me)
+    let out = Command::new(me)
         .env("ARIA_MOVE_CONFIG", &cfg_path)
         .arg(&src)
         .output()

@@ -1,4 +1,4 @@
-use assert_cmd::cargo::cargo_bin;
+// Use macro invocation directly to avoid deprecated function form
 use std::fs;
 use std::io::Write;
 use std::process::Command;
@@ -47,7 +47,7 @@ fn move_two_directories_concurrently() -> Result<(), Box<dyn std::error::Error>>
     );
     fs::write(&cfg_path, xml)?;
 
-    let bin = cargo_bin!("aria_move");
+    let bin = assert_cmd::cargo::cargo_bin!("aria_move");
 
     // Spawn both processes concurrently.
     let cfg_a = cfg_path.clone();
@@ -56,13 +56,13 @@ fn move_two_directories_concurrently() -> Result<(), Box<dyn std::error::Error>>
     let dir_b_clone = dir_b.clone();
 
     let handle_a = thread::spawn(move || {
-        Command::new(&bin)
+        Command::new(bin)
             .env("ARIA_MOVE_CONFIG", &cfg_a)
             .arg(&dir_a_clone) // pass directory path directly
             .output()
     });
     let handle_b = thread::spawn(move || {
-        Command::new(&bin)
+        Command::new(bin)
             .env("ARIA_MOVE_CONFIG", &cfg_b)
             .arg(&dir_b_clone)
             .output()

@@ -16,12 +16,13 @@ fn write_file(path: &Path, contents: &str) {
 
 /// Build a Config with provided bases and flags.
 fn mk_cfg(download: &Path, completed: &Path, preserve_metadata: bool, dry_run: bool) -> Config {
-    let mut cfg = Config::default();
-    cfg.download_base = download.to_path_buf();
-    cfg.completed_base = completed.to_path_buf();
-    cfg.preserve_metadata = preserve_metadata;
-    cfg.dry_run = dry_run;
-    cfg
+    Config {
+        download_base: download.to_path_buf(),
+        completed_base: completed.to_path_buf(),
+        preserve_metadata,
+        dry_run,
+        ..Config::default()
+    }
 }
 
 /// Happy path: create a file, move it, verify src removed and dst matches.

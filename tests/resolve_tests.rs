@@ -6,10 +6,11 @@ use aria_move::{Config};
 use aria_move::fs_ops::resolve_source_path;
 
 fn cfg_with(download: &std::path::Path) -> Config {
-    let mut c = Config::default();
-    c.download_base = download.to_path_buf();
-    c.recent_window = Duration::from_secs(300);
-    c
+    Config {
+        download_base: download.to_path_buf(),
+        recent_window: Duration::from_secs(300),
+        ..Config::default()
+    }
 }
 
 #[test]
@@ -46,9 +47,7 @@ fn picks_newest_within_window() {
     let past = SystemTime::now() - Duration::from_secs(3600);
     filetime::set_file_mtime(&old, filetime::FileTime::from_system_time(past)).unwrap();
 
-    let mut cfg = Config::default();
-    cfg.download_base = d.clone();
-    cfg.recent_window = Duration::from_secs(60*5);
+    let cfg = Config { download_base: d.clone(), recent_window: Duration::from_secs(60 * 5), ..Config::default() };
 
     let got = resolve_source_path(&cfg, None).unwrap();
     assert_eq!(got, new);
@@ -69,9 +68,7 @@ fn returns_error_when_none_recent() {
     filetime::set_file_mtime(&a, ft).unwrap();
     filetime::set_file_mtime(&b, ft).unwrap();
 
-    let mut cfg = Config::default();
-    cfg.download_base = d.clone();
-    cfg.recent_window = Duration::from_secs(1); // strict recent -> none recent
+    let cfg = Config { download_base: d.clone(), recent_window: Duration::from_secs(1), ..Config::default() }; // strict recent -> none recent
 
     // Should now fail instead of falling back
     let err = resolve_source_path(&cfg, None).unwrap_err();
@@ -89,9 +86,7 @@ fn ignores_deny_suffixes() {
     fs::write(&tmp, b"x").unwrap();
     fs::write(&real, b"y").unwrap();
 
-    let mut cfg = Config::default();
-    cfg.download_base = d.clone();
-    cfg.recent_window = Duration::from_secs(3600);
+    let cfg = Config { download_base: d.clone(), recent_window: Duration::from_secs(3600), ..Config::default() };
 
     let got = resolve_source_path(&cfg, None).unwrap();
     assert_eq!(got, real);

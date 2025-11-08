@@ -35,7 +35,7 @@ fn aria2_positional_input_accepted_and_parsed() {
 
     // Run binary with aria2-style positional args: TASK_ID NUM_FILES SOURCE_PATH
     let me = assert_cmd::cargo::cargo_bin!("aria_move");
-    let out = Command::new(&me)
+    let out = Command::new(me)
         .env("ARIA_MOVE_CONFIG", &cfg_path)
         .arg("7b3f1234")
         .arg("1")

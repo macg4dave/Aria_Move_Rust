@@ -3,7 +3,7 @@ use aria_move::prelude::*;
 #[test]
 fn prelude_exports_expected_items() {
     // Ensure types are accessible
-    let mut cfg = Config::default();
+    let _cfg = Config::default();
     // Just confirm we can reference a variant and function names.
     let _ = LogLevel::Debug;
     let _err = Error::Interrupted;
@@ -14,6 +14,5 @@ fn prelude_exports_expected_items() {
     // Helpers re-exported in prelude
     let _ = default_config_path();
     let _shutdown_fn: fn() = request_shutdown;
-    // Mutate cfg to silence unused warning
-    cfg.preserve_metadata = false;
+    // Placeholder to keep bindings referenced without needless mutations
 }

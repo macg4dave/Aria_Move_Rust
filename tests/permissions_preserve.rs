@@ -9,11 +9,13 @@ use tempfile::tempdir;
 fn file_move_preserve_permissions_only() -> Result<(), Box<dyn std::error::Error>> {
     let download = tempdir()?;
     let completed = tempdir()?;
-    let mut cfg = aria_move::Config::default();
-    cfg.download_base = download.path().to_path_buf();
-    cfg.completed_base = completed.path().to_path_buf();
-    cfg.preserve_metadata = false;
-    cfg.preserve_permissions = true;
+    let cfg = aria_move::Config {
+        download_base: download.path().to_path_buf(),
+        completed_base: completed.path().to_path_buf(),
+        preserve_metadata: false,
+        preserve_permissions: true,
+        ..aria_move::Config::default()
+    };
 
     let src = download.path().join("perm.txt");
     fs::write(&src, b"perm")?;
@@ -36,11 +38,13 @@ fn file_move_preserve_permissions_only() -> Result<(), Box<dyn std::error::Error
 fn dir_move_preserve_permissions_only() -> Result<(), Box<dyn std::error::Error>> {
     let download = tempdir()?;
     let completed = tempdir()?;
-    let mut cfg = aria_move::Config::default();
-    cfg.download_base = download.path().to_path_buf();
-    cfg.completed_base = completed.path().to_path_buf();
-    cfg.preserve_metadata = false;
-    cfg.preserve_permissions = true;
+    let cfg = aria_move::Config {
+        download_base: download.path().to_path_buf(),
+        completed_base: completed.path().to_path_buf(),
+        preserve_metadata: false,
+        preserve_permissions: true,
+        ..aria_move::Config::default()
+    };
 
     let dir = download.path().join("d");
     fs::create_dir_all(&dir)?;

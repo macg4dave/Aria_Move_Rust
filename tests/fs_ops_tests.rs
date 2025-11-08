@@ -33,8 +33,7 @@ fn safe_copy_and_rename_creates_destination_and_cleans_tmp() {
 
     // Ensure no temp files remain.
     // Current temp pattern: ".aria_move.<pid>.<nanos>[.<attempt>].tmp"
-    for entry in fs::read_dir(&dest_dir).expect("list dest dir") {
-        let entry = entry.expect("dir entry");
+    for entry in fs::read_dir(&dest_dir).expect("list dest dir").flatten() {
         let name = entry.file_name();
         let name_s = name.to_string_lossy();
         assert!(

@@ -72,8 +72,7 @@ fn safe_copy_and_rename_with_concurrent_symlink_creation() {
     assert_eq!(content, "from_src");
 
     // Ensure no tmp files remain. Current temp pattern: ".aria_move.<pid>.<nanos>[.<attempt>].tmp"
-    for entry in fs::read_dir(&dest_dir).unwrap() {
-        let entry = entry.unwrap();
+    for entry in fs::read_dir(&dest_dir).unwrap().flatten() {
         let name = entry.file_name();
         let name_s = name.to_string_lossy();
         assert!(

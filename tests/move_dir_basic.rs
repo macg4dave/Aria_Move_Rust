@@ -4,12 +4,13 @@ use aria_move::{Config, fs_ops};
 use tempfile::tempdir;
 
 fn mk_cfg(download: &std::path::Path, completed: &std::path::Path, preserve_metadata: bool, dry_run: bool) -> Config {
-    let mut cfg = Config::default();
-    cfg.download_base = download.to_path_buf();
-    cfg.completed_base = completed.to_path_buf();
-    cfg.preserve_metadata = preserve_metadata;
-    cfg.dry_run = dry_run;
-    cfg
+    Config {
+        download_base: download.to_path_buf(),
+        completed_base: completed.to_path_buf(),
+        preserve_metadata,
+        dry_run,
+        ..Config::default()
+    }
 }
 
 #[test]

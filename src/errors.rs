@@ -109,12 +109,12 @@ mod tests {
     #[test]
     fn maps_io_errors() {
         let nf = io::Error::from(io::ErrorKind::NotFound);
-        let e = AriaMoveError::from_io("/missing", &nf);
-        assert!(matches!(e, AriaMoveError::SourceNotFound(p) if p == PathBuf::from("/missing")));
+    let e = AriaMoveError::from_io("/missing", &nf);
+    assert!(matches!(e, AriaMoveError::SourceNotFound(p) if p.as_path() == "/missing"));
 
         let pd = io::Error::from(io::ErrorKind::PermissionDenied);
-        let e = AriaMoveError::from_io("/root", &pd);
-        assert!(matches!(e, AriaMoveError::PermissionDenied { path, .. } if path == PathBuf::from("/root")));
+    let e = AriaMoveError::from_io("/root", &pd);
+    assert!(matches!(e, AriaMoveError::PermissionDenied { path, .. } if path.as_path() == "/root"));
 
         let other = io::Error::from(io::ErrorKind::Other);
         let e = AriaMoveError::from_io("/x", &other);

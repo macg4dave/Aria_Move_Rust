@@ -19,9 +19,8 @@ fn tmp_is_cleaned_on_rename_failure() {
     assert!(res.is_err(), "expected error due to readonly directory");
 
     // Ensure no temp files remain with pattern .aria_move.*.tmp
-    let entries = fs::read_dir(&dest_dir).unwrap();
-    for e in entries {
-        let name = e.unwrap().file_name();
+    for entry in fs::read_dir(&dest_dir).unwrap().flatten() {
+        let name = entry.file_name();
         let s = name.to_string_lossy();
         assert!(
             !(s.starts_with(".aria_move.") && s.ends_with(".tmp")),

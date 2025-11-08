@@ -42,10 +42,12 @@ fn xattrs_preserved_on_dir_move_copy_fallback() {
     let download = tempdir().unwrap();
     let completed = tempdir().unwrap();
 
-    let mut cfg = Config::default();
-    cfg.download_base = download.path().into();
-    cfg.completed_base = completed.path().into();
-    cfg.preserve_metadata = true; // preserve everything
+    let cfg = Config {
+        download_base: download.path().into(),
+        completed_base: completed.path().into(),
+        preserve_metadata: true, // preserve everything
+        ..Config::default()
+    };
 
     let src_dir = download.path().join("tree");
     fs::create_dir_all(&src_dir).unwrap();
