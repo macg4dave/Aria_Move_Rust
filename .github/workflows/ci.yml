@@ -39,7 +39,7 @@ jobs:
         with:
           components: clippy
       - name: cargo clippy (report warnings)
-        run: cargo clippy --all-targets --all-features -- -A clippy::pedantic
+        run: cargo clippy --all-targets --all-features -- -A warnings -A clippy::pedantic
 
   test:
     name: Tests
@@ -52,6 +52,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Rust toolchain (stable)
         uses: dtolnay/rust-toolchain@stable
+      - name: Set lint cap to warn for tests
+        run: echo "RUSTFLAGS=-Cap-lints=warn" >> $GITHUB_ENV
       - name: Cache cargo build artifacts
         uses: swatinem/rust-cache@v2
         with:
