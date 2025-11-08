@@ -88,6 +88,8 @@ Create `C:\Tools\aria_move_hook.bat`:
 ```bat
 @echo off
 "C:\Tools\aria_move.exe" %1 %2 %3
+```
+
 ### Running under systemd (non-interactive first run)
 
 If `aria_move` is launched only via a systemd service user (e.g. `aria2`) the automatic first-run template may not appear because you never invoke the binary interactively as that user. Pre-create a config in a root-managed path and point the wrapper to it.
@@ -198,7 +200,7 @@ Type=simple
 User=aria2
 Group=aria2
 RemainAfterExit=yes
-ExecStart=/usr/bin/aria2c --console-log-level=warn --rpc-listen-all --conf-path=/etc/aria2/aria.conf
+ExecStart=/usr/bin/aria2c --console-log-level=warn --conf-path=/etc/aria2/aria.conf
 ExecReload=/usr/bin/kill -HUP $MAINPID
 RestartSec=1min
 Restart=on-failure
