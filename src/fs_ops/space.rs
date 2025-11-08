@@ -105,12 +105,9 @@ pub(super) fn free_space_bytes(path: &Path) -> io::Result<u64> {
     }
 
     // On some platforms (e.g., older macOS), f_frsize may be 0; fall back to f_bsize.
-    let block_size: u64 = if s.f_frsize != 0 {
-        s.f_frsize as u64
-    } else {
-        s.f_bsize as u64
-    };
-    Ok((s.f_bavail as u64).saturating_mul(block_size))
+    // Use `u64::from` to avoid redundant casts where the underlying type is already u64.
+    let block_size: u64 = if s.f_frsize != 0 { s.f_frsize } else { s.f_bsize };
+    Ok(s.f_bavail.saturating_mul(block_size))
 }
 
 /// Return available free space (in bytes) on the filesystem hosting `path`.
