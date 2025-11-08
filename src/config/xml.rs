@@ -229,40 +229,45 @@ pub fn ensure_default_config_exists() -> Option<PathBuf> {
 
 // Map XmlConfig -> Config (used by both loaders)
 fn xml_to_config(parsed: XmlConfig) -> Config {
-    let mut cfg = Config::default();
-
-    // Paths
-    cfg.download_base = parsed
+    let default_cfg = Config::default();
+    let download_base = parsed
         .download_base
         .as_deref()
         .map(|s| PathBuf::from(s.trim()))
         .unwrap_or_else(|| PathBuf::from(DOWNLOAD_BASE_DEFAULT));
-    cfg.completed_base = parsed
+    let completed_base = parsed
         .completed_base
         .as_deref()
         .map(|s| PathBuf::from(s.trim()))
         .unwrap_or_else(|| PathBuf::from(COMPLETED_BASE_DEFAULT));
-    if let Some(s) = parsed.log_file.as_deref() {
-        let trimmed = s.trim();
-        if !trimmed.is_empty() {
-            cfg.log_file = Some(PathBuf::from(trimmed));
-        }
-    }
-
-    // Log level
-    if let Some(s) = parsed.log_level.as_deref() {
-        if let Ok(level) = s.trim().parse::<LogLevel>() {
-            cfg.log_level = level;
-        }
-    }
-
-    // Flags
-    cfg.preserve_metadata = parsed.preserve_metadata.unwrap_or(false);
-    cfg.preserve_permissions = parsed.preserve_permissions.unwrap_or(false);
-    cfg.recent_window =
+    let log_file = match parsed.log_file.as_deref().map(str::trim) {
+        Some(s) if !s.is_empty() => Some(PathBuf::from(s)),
+        _ => default_cfg.log_file.clone(),
+    };
+    let log_level = parsed
+        .log_level
+        .as_deref()
+        .and_then(|s| s.trim().parse::<LogLevel>().ok())
+        .unwrap_or(default_cfg.log_level);
+    let preserve_metadata = parsed.preserve_metadata.unwrap_or(false);
+    let preserve_permissions = if preserve_metadata {
+        false
+    } else {
+        parsed.preserve_permissions.unwrap_or(false)
+    };
+    let recent_window =
         Duration::from_secs(parsed.recent_window_seconds.unwrap_or(DEFAULT_RECENT_SECS));
 
-    cfg
+    Config {
+        download_base,
+        completed_base,
+        log_level,
+        log_file,
+        dry_run: false,
+        preserve_metadata,
+        preserve_permissions,
+        recent_window,
+    }
 }
 
 /// Load a Config from a specific XML file path (quick_xml).

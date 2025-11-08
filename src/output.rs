@@ -13,12 +13,8 @@ fn color_enabled() -> bool {
     if env::var_os("NO_COLOR").is_some() {
         return false;
     }
-    if let Ok(v) = env::var("CLICOLOR_FORCE") {
-        if v == "1" { return true; }
-    }
-    if let Ok(v) = env::var("CLICOLOR") {
-        if v == "0" { return false; }
-    }
+    if let Ok(v) = env::var("CLICOLOR_FORCE") && v == "1" { return true; }
+    if let Ok(v) = env::var("CLICOLOR") && v == "0" { return false; }
     is_tty()
 }
 

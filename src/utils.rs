@@ -84,6 +84,7 @@ pub(crate) fn ensure_not_base(download_base: &Path, candidate: &Path) -> anyhow:
 /// Quick writable probe: create and remove a small file in `dir`.
 /// Uses create_new to avoid clobbering existing files.
 #[cfg(any(test, feature = "test-helpers"))]
+#[allow(dead_code)]
 pub(crate) fn is_writable_probe(dir: &Path) -> std::io::Result<()> {
     let probe = dir.join(format!(".aria_move_probe_{}.tmp", std::process::id()));
     match fs::OpenOptions::new()

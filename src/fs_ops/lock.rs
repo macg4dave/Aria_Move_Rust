@@ -58,6 +58,11 @@ impl Drop for DirLock {
                 let _ = CloseHandle(self.handle as _);
             }
         }
+        // Try to remove the on-disk lock file name when dropping the guard so that
+        // completed operations don't leave stale `.aria_move.dir.lock` files behind.
+        // This is best-effort: removal may fail if other processes still hold or have
+        // recreated the lock file; ignore errors.
+        let _ = std::fs::remove_file(&self._path);
     }
 }
 
@@ -94,7 +99,7 @@ pub fn acquire_dir_lock(dir: &Path) -> io::Result<DirLock> {
         } else {
             trace!(path = %lock_path.display(), waited_ms = waited.as_millis() as u64, "lock acquired after wait");
         }
-        return Ok(DirLock { file: f, _path: lock_path });
+    Ok(DirLock { file: f, _path: lock_path })
     }
 
     #[cfg(windows)]
@@ -175,13 +180,11 @@ pub fn try_acquire_dir_lock(dir: &Path) -> io::Result<Option<DirLock>> {
             return Ok(Some(DirLock { file: f, _path: lock_path }));
         }
         let err = io::Error::last_os_error();
-        if let Some(code) = err.raw_os_error() {
-            if code == libc::EWOULDBLOCK {
-                trace!(path = %lock_path.display(), "try-lock would block");
-                return Ok(None);
-            }
+        if let Some(code) = err.raw_os_error() && code == libc::EWOULDBLOCK {
+            trace!(path = %lock_path.display(), "try-lock would block");
+            return Ok(None);
         }
-        return Err(err);
+    Err(err)
     }
 
     #[cfg(windows)]

@@ -14,6 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Notes:
 /// - Returns io::ErrorKind::NotFound if `src` no longer exists (race lost).
 /// - May retry a few times if an unlikely name collision occurs.
+#[allow(dead_code)]
 pub(super) fn claim_source(src: &Path) -> io::Result<PathBuf> {
     let pid = std::process::id();
     // Base timestamp used in the suffix; attempt index is appended if we retry.

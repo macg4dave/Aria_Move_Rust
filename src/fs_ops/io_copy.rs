@@ -17,6 +17,7 @@ use std::path::Path;
 
 /// Durability mode controlling post-write flush behavior.
 #[derive(Clone, Copy, Debug)]
+#[allow(dead_code)] // Data mode unused today (future lighter durability); keep for API clarity.
 pub enum DurabilityMode {
     /// Ensure written data reaches the OS page cache (`flush`), but do not force
     /// a disk barrier. Fastest; may lose data on sudden power loss.
@@ -30,8 +31,10 @@ pub enum DurabilityMode {
 pub struct CopyResult {
     /// Total bytes copied from source to destination.
     pub bytes: u64,
+    #[allow(dead_code)] // Not currently read by callers; retained for future perf instrumentation.
     /// Size of the buffer used for copying (for perf metrics).
     pub buf_size: usize,
+    #[allow(dead_code)] // Not currently read; retained for observability.
     /// Durability mode applied.
     pub mode: DurabilityMode,
 }

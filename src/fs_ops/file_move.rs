@@ -2,7 +2,7 @@
 //! - Fast path: atomic rename into completed_base
 //! - Fallback: safe copy -> fsync -> atomic rename, then remove source
 //! - Optional: preserve src permissions/timestamps on destination
-//! Concurrency:
+//!   Concurrency:
 //! - Per-source lock to prevent double-processing of the same item
 //! - Per-destination-base lock to serialize finalization inside completed_base
 
@@ -47,14 +47,14 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
     } else {
         // Dry-run: keep a light permission check to surface obvious issues without writing.
         info!(action = "mkdir -p", path = %dest_dir.display(), "dry-run");
-        if let Some(parent) = dest_dir.parent() {
-            if !(parent.exists() && !parent.metadata()?.permissions().readonly()) {
-                return Err(AriaMoveError::PermissionDenied {
-                    path: dest_dir.to_path_buf(),
-                    context: "dry-run parent missing or readonly".into(),
-                }
-                .into());
+        if let Some(parent) = dest_dir.parent()
+            && (!parent.exists() || parent.metadata()?.permissions().readonly())
+        {
+            return Err(AriaMoveError::PermissionDenied {
+                path: dest_dir.to_path_buf(),
+                context: "dry-run parent missing or readonly".into(),
             }
+            .into());
         }
     }
 
@@ -147,22 +147,21 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
     match fs::remove_file(src) {
         Ok(()) => {}
         Err(e) if e.kind() == io::ErrorKind::NotFound => {/* already gone; ignore */}
-        Err(e) => return Err(io_error_with_help("remove original file", src)(e).into()),
+    Err(e) => return Err(io_error_with_help("remove original file", src)(e)),
     }
 
     // Best-effort fsync of the source parent to persist the deletion on Unix.
     #[cfg(unix)]
-    if let Some(src_parent) = src.parent() {
-        if let Err(e) = super::util::fsync_dir(src_parent) {
-            warn!(error = %e, dir = %src_parent.display(), "best-effort fsync(src_parent after delete) failed");
-        }
+    if let Some(src_parent) = src.parent() && let Err(e) = super::util::fsync_dir(src_parent) {
+        warn!(error = %e, dir = %src_parent.display(), "best-effort fsync(src_parent after delete) failed");
     }
 
     // If only permissions (not full metadata) requested, apply now at dest
-    if let Some(meta) = meta_before.as_ref() {
-        if !config.preserve_metadata && config.preserve_permissions {
-            let _ = metadata::preserve_permissions_only(&dest, meta);
-        }
+    if let Some(meta) = meta_before.as_ref()
+        && !config.preserve_metadata
+        && config.preserve_permissions
+    {
+        let _ = metadata::preserve_permissions_only(&dest, meta);
     }
 
     info!(src = %src.display(), dest = %dest.display(), "Copied file and removed source");

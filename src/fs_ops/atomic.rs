@@ -22,13 +22,11 @@ pub fn try_atomic_move(src: &Path, dst: &Path) -> Result<MoveOutcome> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        if let (Some(src_parent), Some(dst_parent)) = (src.parent(), dst.parent()) {
-            // Best-effort metadata checks; if either stat fails, proceed and let rename surface errors.
-            if let (Ok(s_meta), Ok(d_meta)) = (fs::metadata(src_parent), fs::metadata(dst_parent)) {
-                if s_meta.dev() != d_meta.dev() {
-                    return Ok(MoveOutcome::CrossDevice);
-                }
-            }
+        if let (Some(src_parent), Some(dst_parent)) = (src.parent(), dst.parent())
+            && let (Ok(s_meta), Ok(d_meta)) = (fs::metadata(src_parent), fs::metadata(dst_parent))
+            && s_meta.dev() != d_meta.dev()
+        {
+            return Ok(MoveOutcome::CrossDevice);
         }
     }
 
@@ -56,18 +54,14 @@ pub fn try_atomic_move(src: &Path, dst: &Path) -> Result<MoveOutcome> {
     #[cfg(unix)]
     {
         // Ignore fsync errors to avoid turning a successful rename into a failure.
-        if let Some(dst_parent) = dst.parent() {
-            if let Err(e) = super::util::fsync_dir(dst_parent) {
-                debug!(error = %e, dir = %dst_parent.display(), "best-effort fsync(dst_parent) failed");
-            }
+        if let Some(dst_parent) = dst.parent() && let Err(e) = super::util::fsync_dir(dst_parent) {
+            debug!(error = %e, dir = %dst_parent.display(), "best-effort fsync(dst_parent) failed");
         }
-        // If moving between different directories on the same fs, also fsync the source parent.
-        if let (Some(src_parent), Some(dst_parent)) = (src.parent(), dst.parent()) {
-            if src_parent != dst_parent {
-                if let Err(e) = super::util::fsync_dir(src_parent) {
-                    debug!(error = %e, dir = %src_parent.display(), "best-effort fsync(src_parent) failed");
-                }
-            }
+        if let (Some(src_parent), Some(dst_parent)) = (src.parent(), dst.parent())
+            && src_parent != dst_parent
+            && let Err(e) = super::util::fsync_dir(src_parent)
+        {
+            debug!(error = %e, dir = %src_parent.display(), "best-effort fsync(src_parent) failed");
         }
     }
 

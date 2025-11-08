@@ -118,12 +118,8 @@ impl Args {
         // separator or a dot (e.g. "file.iso") or a drive-colon on Windows
         // (e.g. "C:\\file"). This avoids misinterpreting aria2 task IDs
         // (hash-like strings) as file paths.
-        if self.num_files.is_none() {
-            if let Some(t) = &self.task_id {
-                if Self::looks_like_path(t) {
-                    return Some(std::path::PathBuf::from(t));
-                }
-            }
+        if self.num_files.is_none() && let Some(t) = &self.task_id && Self::looks_like_path(t) {
+            return Some(std::path::PathBuf::from(t));
         }
 
         None
@@ -141,9 +137,7 @@ impl Args {
         if self.debug {
             return Some(LogLevel::Debug);
         }
-        self.log_level
-            .as_deref()
-            .and_then(|s| LogLevel::parse(s))
+        self.log_level.as_deref().and_then(LogLevel::parse)
     }
 
     /// Apply CLI overrides to a loaded Config (in-place). No-ops for unset flags.

@@ -40,10 +40,8 @@ pub fn resolve_source_path(config: &Config, maybe_path: Option<&Path>) -> Result
                     if ft.is_file() {
                         return Ok(p.to_path_buf());
                     } else if ft.is_symlink() {
-                        if let Ok(dm) = std::fs::metadata(p) {
-                            if dm.is_file() {
-                                return Ok(p.to_path_buf());
-                            }
+                        if let Ok(dm) = std::fs::metadata(p) && dm.is_file() {
+                            return Ok(p.to_path_buf());
                         }
                         return Err(AriaMoveError::ProvidedNotFile(p.to_path_buf()).into());
                     } else {
@@ -114,17 +112,13 @@ pub fn resolve_source_path(config: &Config, maybe_path: Option<&Path>) -> Result
                     }
                     Err(e) => {
                         errors += 1;
-                            if let Some(ioe) = e.io_error() {
-                                if ioe.kind() == std::io::ErrorKind::PermissionDenied { denied += 1; }
-                            }
+                            if let Some(ioe) = e.io_error() && ioe.kind() == std::io::ErrorKind::PermissionDenied { denied += 1; }
                     }
                 }
             }
             Err(e) => {
                 errors += 1;
-                    if let Some(code) = e.io_error().and_then(|ioe| ioe.raw_os_error()) {
-                        trace!(code, "walkdir error raw_os_error");
-                    }
+                    if let Some(code) = e.io_error().and_then(|ioe| ioe.raw_os_error()) { trace!(code, "walkdir error raw_os_error"); }
                     if let Some(ioe) = e.io_error() {
                         if let Some(code) = ioe.raw_os_error() { trace!(code, "walkdir error raw_os_error"); }
                         if ioe.kind() == std::io::ErrorKind::PermissionDenied { denied += 1; }
@@ -137,12 +131,10 @@ pub fn resolve_source_path(config: &Config, maybe_path: Option<&Path>) -> Result
     if let Some((_, path)) = newest {
         if path.try_exists().unwrap_or(false) {
             // Re-validate still a regular file
-            if let Ok(m) = std::fs::metadata(&path) {
-                if m.is_file() {
-                    let elapsed = started.elapsed();
-                    debug!(scanned, errors, denied, millis = elapsed.as_millis() as u64, chosen=%path.display(), "resolution success");
-                    return Ok(path);
-                }
+            if let Ok(m) = std::fs::metadata(&path) && m.is_file() {
+                let elapsed = started.elapsed();
+                debug!(scanned, errors, denied, millis = elapsed.as_millis() as u64, chosen=%path.display(), "resolution success");
+                return Ok(path);
             }
         }
         return Err(AriaMoveError::Disappeared(path).into());

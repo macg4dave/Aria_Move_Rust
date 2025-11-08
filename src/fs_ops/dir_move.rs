@@ -2,7 +2,7 @@
 //! Strategy:
 //! - Try atomic rename of the whole directory first (fast path).
 //! - On failure (e.g., EXDEV), pre-check disk space, then copy the tree and remove the source.
-//! Concurrency:
+//!   Concurrency:
 //! - Per-source move lock to avoid concurrent claims on the same source.
 //! - Per-destination-base lock to serialize finalization into the completed_base.
 
@@ -79,17 +79,14 @@ pub fn move_dir(config: &Config, src_dir: &Path) -> Result<PathBuf> {
                 // Best-effort fsync of destination parent (and source parent if different) on Unix.
                 #[cfg(unix)]
                 {
-                    if let Some(dst_parent) = target.parent() {
-                        if let Err(e) = super::util::fsync_dir(dst_parent) {
-                            warn!(error = %e, dir = %dst_parent.display(), "best-effort fsync(dst_parent) failed");
-                        }
+                    if let Some(dst_parent) = target.parent() && let Err(e) = super::util::fsync_dir(dst_parent) {
+                        warn!(error = %e, dir = %dst_parent.display(), "best-effort fsync(dst_parent) failed");
                     }
-                    if let (Some(sp), Some(dp)) = (src_dir.parent(), target.parent()) {
-                        if sp != dp {
-                            if let Err(e) = super::util::fsync_dir(sp) {
-                                warn!(error = %e, dir = %sp.display(), "best-effort fsync(src_parent) failed");
-                            }
-                        }
+                    if let (Some(sp), Some(dp)) = (src_dir.parent(), target.parent())
+                        && sp != dp
+                        && let Err(e) = super::util::fsync_dir(sp)
+                    {
+                        warn!(error = %e, dir = %sp.display(), "best-effort fsync(src_parent) failed");
                     }
                 }
                 did_rename = true;
@@ -172,14 +169,14 @@ pub fn move_dir(config: &Config, src_dir: &Path) -> Result<PathBuf> {
         // Copy file data
         fs::copy(path, &dst).map_err(io_error_with_help("copy file to destination", &dst))?;
         // Metadata preservation; apply full or permissions-only per flags (best-effort)
-        if config.preserve_metadata || config.preserve_permissions {
-            if let Ok(src_meta) = fs::metadata(path) {
-                if config.preserve_metadata {
-                    let _ = super::metadata::preserve_metadata(&dst, &src_meta);
-                    let _ = super::metadata::preserve_xattrs(path, &dst);
-                } else {
-                    let _ = super::metadata::preserve_permissions_only(&dst, &src_meta);
-                }
+        if (config.preserve_metadata || config.preserve_permissions)
+            && let Ok(src_meta) = fs::metadata(path)
+        {
+            if config.preserve_metadata {
+                let _ = super::metadata::preserve_metadata(&dst, &src_meta);
+                let _ = super::metadata::preserve_xattrs(path, &dst);
+            } else {
+                let _ = super::metadata::preserve_permissions_only(&dst, &src_meta);
             }
         }
         Ok(())

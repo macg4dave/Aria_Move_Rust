@@ -80,10 +80,8 @@ pub fn default_config_path() -> Result<PathBuf> {
 /// If that is unavailable, falls back to $HOME/.local/share/aria_move/aria_move.log.
 pub fn default_log_path() -> Result<PathBuf> {
     // 1) Colocate with config
-    if let Ok(cfg_path) = default_config_path() {
-        if let Some(parent) = cfg_path.parent() {
-            return Ok(parent.join("aria_move.log"));
-        }
+    if let Ok(cfg_path) = default_config_path() && cfg_path.parent().is_some() {
+        return Ok(cfg_path.parent().unwrap().join("aria_move.log"));
     }
 
     // 2) data_dir fallback

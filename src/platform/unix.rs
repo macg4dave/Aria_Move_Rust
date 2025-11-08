@@ -98,7 +98,7 @@ pub fn check_disk_space(path: &Path) -> io::Result<u64> {
                 return Err(io::Error::last_os_error());
             }
             let stat = stat.assume_init();
-            Ok((stat.f_bavail as u64).saturating_mul(stat.f_bsize as u64))
+            Ok((stat.f_bavail as u64).saturating_mul(stat.f_bsize))
         }
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]

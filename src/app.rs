@@ -5,7 +5,7 @@
 use anyhow::Result;
 use aria_move::AriaMoveError;
 use std::sync::{Arc, Mutex};
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use aria_move::output as out;
 
 use aria_move::{
@@ -61,11 +61,7 @@ pub fn run(args: Args) -> Result<()> {
         if args.completed_base.is_none() {
             cfg.completed_base = cb;
         }
-        if args.log_level.is_none() {
-            if let Some(l) = lvl {
-                cfg.log_level = l;
-            }
-        }
+        if args.log_level.is_none() && let Some(l) = lvl { cfg.log_level = l; }
         if cfg.log_file.is_none() {
             cfg.log_file = lf;
         }
@@ -94,9 +90,7 @@ pub fn run(args: Args) -> Result<()> {
     if args.preserve_metadata {
         cfg.preserve_metadata = true;
     }
-    if args.preserve_permissions && !cfg.preserve_metadata {
-        cfg.preserve_permissions = true;
-    }
+    if args.preserve_permissions && !cfg.preserve_metadata { cfg.preserve_permissions = true; }
     if args.dry_run {
         cfg.dry_run = true;
     }
@@ -126,7 +120,7 @@ pub fn run(args: Args) -> Result<()> {
         return Ok(());
     }
 
-    info!("Starting aria_move: {:?}", args);
+    debug!("Starting aria_move: {:?}", args);
 
     // Main run (so we can drop guard after)
     let result = (|| -> Result<()> {

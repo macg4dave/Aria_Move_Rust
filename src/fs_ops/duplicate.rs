@@ -38,10 +38,8 @@ pub fn resolve_destination(dst_dir: &Path, name: &OsStr, policy: OnDuplicate) ->
         OnDuplicate::Skip | OnDuplicate::Overwrite => candidate,
         OnDuplicate::RenameWithSuffix => {
             // Do not suffix our own internal transient names; keep them as-is.
-            if let Some(s) = name.to_str() {
-                if s.starts_with(".aria_move.") {
-                    return candidate;
-                }
+            if let Some(s) = name.to_str() && s.starts_with(".aria_move.") {
+                return candidate;
             }
             // Path-length awareness: first, ensure the base name (without suffix) fits.
             let base = Path::new(name);
@@ -138,10 +136,10 @@ fn build_name_with_suffix(stem: &OsStr, ext: Option<&OsStr>, suffix: &str) -> Os
     }
 
     let mut stem_os = stem.to_os_string();
-    let mut name_len = name_len_units(&stem_os) + overhead;
+    let name_len = name_len_units(&stem_os) + overhead;
     if name_len > MAX_FILENAME_LEN {
         // Need to shrink stem to fit
-        let mut budget = MAX_FILENAME_LEN.saturating_sub(overhead);
+    let budget = MAX_FILENAME_LEN.saturating_sub(overhead);
         if budget == 0 {
             // Pathologically small budget; fall back to minimal marker
             stem_os = OsString::from("f");

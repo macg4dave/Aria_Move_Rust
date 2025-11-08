@@ -118,14 +118,15 @@ pub fn init_tracing(
                     .event_format(tsfmt::format().json())
                     .with_timer(LocalHumanTime)
                     .with_level(true)
-                    .with_target(true)
-                    .with_thread_ids(true);
+                    .with_target(false)
+                    .with_thread_ids(false);
                 let file_layer = tsfmt::layer()
                     .event_format(tsfmt::format().json())
                     .with_timer(LocalHumanTime)
                     .with_level(true)
-                    .with_target(true)
-                    .with_thread_ids(true)
+                    .with_target(false)
+                    .with_thread_ids(false)
+                    .with_ansi(false) // disable color codes in log file
                     .with_writer(writer);
                 registry()
                     .with(env_filter)
@@ -136,14 +137,15 @@ pub fn init_tracing(
                 let stdout_layer = tsfmt::layer()
                     .with_timer(LocalHumanTime)
                     .with_level(true)
-                    .with_target(true)
-                    .with_thread_ids(true)
+                    .with_target(false)
+                    .with_thread_ids(false)
                     .compact();
                 let file_layer = tsfmt::layer()
                     .with_timer(LocalHumanTime)
                     .with_level(true)
-                    .with_target(true)
-                    .with_thread_ids(true)
+                    .with_target(false)
+                    .with_thread_ids(false)
+                    .with_ansi(false) // disable color codes in log file
                     .compact()
                     .with_writer(writer);
                 registry()
@@ -172,15 +174,15 @@ pub fn init_tracing(
             .event_format(tsfmt::format().json())
             .with_timer(LocalHumanTime)
             .with_level(true)
-            .with_target(true)
-            .with_thread_ids(true);
+            .with_target(false)
+            .with_thread_ids(false);
         registry().with(env_filter).with(stdout_layer).init();
     } else {
         let stdout_layer = tsfmt::layer()
             .with_timer(LocalHumanTime)
             .with_level(true)
-            .with_target(true)
-            .with_thread_ids(true)
+            .with_target(false)
+            .with_thread_ids(false)
             .compact();
         registry().with(env_filter).with(stdout_layer).init();
     }
