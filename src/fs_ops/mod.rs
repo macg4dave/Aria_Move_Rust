@@ -37,6 +37,7 @@ pub use file_move::move_file;
 pub use helpers::{io_error_with_help, io_error_with_help_io};
 pub use metadata::{preserve_metadata, preserve_xattrs};
 pub use resolve::resolve_source_path;
+pub use util::resume_temp_path; // expose for tests (deterministic resume temp naming)
 
 // Locking API (currently considered advanced; subject to change)
 pub use lock::{DirLock, acquire_dir_lock, acquire_move_lock, try_acquire_dir_lock};

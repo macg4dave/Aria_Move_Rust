@@ -11,18 +11,9 @@ fn mk_cfg(download: &Path, completed: &Path) -> aria_move::Config {
     }
 }
 
-// Replicate the resume temp path logic (deterministic) to pre-create a partial temp file.
-fn resume_temp_path(dest: &Path) -> std::path::PathBuf {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    dest.to_string_lossy().hash(&mut hasher);
-    let h = hasher.finish();
-    let name = format!(".aria_move.resume.{:016x}.tmp", h);
-    match dest.parent() {
-        Some(p) => p.join(name),
-        None => name.into(),
-    }
+// Use the public util::resume_temp_path instead of duplicating hashing logic.
+fn test_resume_temp_path(dest: &Path) -> std::path::PathBuf {
+    aria_move::fs_ops::resume_temp_path(dest)
 }
 
 #[test]
@@ -37,7 +28,7 @@ fn resumes_partial_file_copy_and_finalizes() -> Result<(), Box<dyn std::error::E
 
     // Compute intended destination and temp path
     let dest = completed.path().join("big.dat");
-    let tmp = resume_temp_path(&dest);
+    let tmp = test_resume_temp_path(&dest);
 
     // Pre-create partial temp file with first half of content
     if let Some(parent) = tmp.parent() {
