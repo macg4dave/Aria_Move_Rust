@@ -52,8 +52,8 @@ xattrs = ["dep:xattr"]
 targets = [
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",
-    "x86_64-apple-darwin",
-    "aarch64-apple-darwin",
+    # macOS universal2 (combines x86_64 + arm64 into one fat binary)
+    "universal-apple-darwin",
     "x86_64-pc-windows-msvc",
 ]
 # Enable checksums and a single tar/zip per target (defaults are fine)
