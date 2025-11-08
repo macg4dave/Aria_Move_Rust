@@ -1,0 +1,20 @@
+# Clippy configuration for Aria_Move_Rust
+# Focus on actionable lints; relax thresholds to reduce noise.
+
+# Complexity tolerance before triggering cognitive_complexity warnings.
+cognitive-complexity-threshold = 35
+
+# Argument count threshold (warn above this).
+too-many-arguments-threshold = 10
+
+# Allow moderately complex type signatures.
+type-complexity-threshold = 500
+
+# Variant name similarity threshold (default is 3; keep explicit for clarity).
+enum-variant-name-threshold = 3
+
+# Number of bool fields in a struct before warning.
+max-struct-bools = 4
+
+# Valid identifiers used in docs/examples.
+doc-valid-idents = ["Aria2", "AriaMove"]
