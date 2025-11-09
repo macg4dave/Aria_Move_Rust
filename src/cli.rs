@@ -98,6 +98,15 @@ pub struct Args {
     /// Emit logs in structured JSON (includes timestamp, level, and structured fields).
     #[arg(long, help = "Emit logs in structured JSON")]
     pub json: bool,
+
+    /// Override config.xml path (highest precedence; overrides ARIA_MOVE_CONFIG and defaults)
+    #[arg(
+        long = "config",
+        value_name = "PATH",
+        value_hint = ValueHint::AnyPath,
+        help = "Path to config.xml (highest precedence; overrides ARIA_MOVE_CONFIG and defaults)"
+    )]
+    pub config_path: Option<PathBuf>,
 }
 
 impl Args {

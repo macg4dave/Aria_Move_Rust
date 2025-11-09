@@ -17,6 +17,11 @@ use aria_move::cli::Args;
 
 /// Run the CLI application.
 pub fn run(args: Args) -> Result<()> {
+    // Apply --config early: highest precedence, before template creation or print-config logic
+    if let Some(p) = args.config_path.as_ref() {
+        unsafe { std::env::set_var("ARIA_MOVE_CONFIG", p); }
+    }
+
     // Handle --print-config before logging init
     if args.print_config {
         if let Ok(cfg_env) = std::env::var("ARIA_MOVE_CONFIG") {
@@ -48,7 +53,7 @@ pub fn run(args: Args) -> Result<()> {
         return Ok(());
     }
 
-    // Create template config if none exists (before logging init)
+    // Create template config if none exists at resolved path (before logging init)
     if let LoadResult::CreatedTemplate(path) = load_or_init()? {
         out::print_success(&format!(
             "A template aria_move config was written to: {}",
@@ -58,7 +63,7 @@ pub fn run(args: Args) -> Result<()> {
             "Edit the file to set `download_base`, `completed_base` and optionally `log_level` and `log_file`. Example:\n\n<config>\n  <download_base>/path/to/incoming</download_base>\n  <completed_base>/path/to/completed</completed_base>\n  <log_level>normal</log_level>\n  <log_file>/path/to/aria_move.log</log_file>\n</config>\n",
         );
         out::print_info(
-            "Then re-run this command. To use a different location set ARIA_MOVE_CONFIG.",
+            "Then re-run this command. To use a different location pass --config or set ARIA_MOVE_CONFIG.",
         );
         return Ok(());
     }

@@ -62,6 +62,16 @@ pub fn default_config_path() -> Result<PathBuf> {
         return Ok(resolved);
     }
 
+    // Unix system-wide config: prefer /etc/aria_move/config.xml if it exists.
+    // This allows systemd services or root-managed installs to provide a global config.
+    // We only pick it when present; we do not attempt to create it by default.
+    if cfg!(unix) {
+        let etc_path = PathBuf::from("/etc/aria_move/config.xml");
+        if etc_path.exists() {
+            return Ok(etc_path);
+        }
+    }
+
     if let Some(base) = config_dir() {
         return Ok(app_path(base, "config.xml"));
     }
@@ -89,11 +99,13 @@ pub fn default_config_path() -> Result<PathBuf> {
 /// Uses the platform data dir (user-writable app data location).
 /// If that is unavailable, falls back to $HOME/.local/share/aria_move/aria_move.log.
 pub fn default_log_path() -> Result<PathBuf> {
-    // 1) Colocate with config
-    if let Ok(cfg_path) = default_config_path()
-        && cfg_path.parent().is_some()
-    {
-        return Ok(cfg_path.parent().unwrap().join("aria_move.log"));
+    // 1) Colocate with config, unless the parent is a system directory like /etc (not writable).
+    if let Ok(cfg_path) = default_config_path() {
+        if let Some(parent) = cfg_path.parent() {
+            if !(cfg!(unix) && parent.starts_with("/etc")) {
+                return Ok(parent.join("aria_move.log"));
+            }
+        }
     }
 
     // 2) data_dir fallback

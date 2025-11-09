@@ -143,7 +143,13 @@ If `aria_move` is launched only via a systemd service user (e.g. `aria2`) the au
    sudo -u aria2 ARIA_MOVE_CONFIG=/etc/aria_move/config.xml /usr/local/bin/aria_move --print-config
    ```
 
-There is no CLI flag for a config path; the environment variable is the supported override. The service user must have read access to the config and write access (if logging to file). If unreadable, defaults are used and moves may be refused due to missing base directories.
+You can now pass a config path via CLI:
+
+```bash
+aria_move --config /etc/aria_move/config.xml --print-config
+```
+
+This flag takes precedence over `ARIA_MOVE_CONFIG` and user defaults. The service user must have read access to the config and write access (if logging to file). If unreadable, defaults are used and moves may be refused due to missing base directories.
 
 ```
 
@@ -269,7 +275,15 @@ On first run (without a config file), aria_move creates a template at:
 
 Edit the file to set your `download_base` and `completed_base` directories, then re-run.
 
-**Override location**: set `ARIA_MOVE_CONFIG` environment variable:
+**Override location**: either use the CLI flag or set an environment variable.
+
+CLI flag (highest precedence):
+
+```bash
+aria_move --config /custom/path/config.xml
+```
+
+Environment variable (lower precedence than `--config`):
 
 ```bash
 export ARIA_MOVE_CONFIG=/custom/path/config.xml
