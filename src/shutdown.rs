@@ -23,8 +23,9 @@ pub fn request() {
 pub fn request_with_reason(code: u8) {
     SHUTDOWN.store(true, Ordering::Relaxed);
     // Preserve first non-zero reason; if already set, leave it.
-    if REASON.load(Ordering::Relaxed) == 0 && code != 0 {
-        REASON.store(code, Ordering::Relaxed);
+    // Use compare_exchange to ensure atomicity (first write wins).
+    if code != 0 {
+        let _ = REASON.compare_exchange(0, code, Ordering::Relaxed, Ordering::Relaxed);
     }
 }
 
