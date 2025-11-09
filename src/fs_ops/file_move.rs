@@ -130,7 +130,7 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
     // Fast path: atomic rename (same filesystem). May return CrossDevice prediction.
     match try_atomic_move(src, &dest) {
         Ok(MoveOutcome::Renamed) => {
-            info!(src = %src.display(), dest = %dest.display(), "Renamed file atomically");
+            debug!(src = %src.display(), dest = %dest.display(), "Renamed file atomically");
             if let Some(meta) = meta_before.as_ref() {
                 if config.preserve_metadata {
                     let _ = metadata::preserve_metadata(&dest, meta);
