@@ -86,8 +86,8 @@ pub fn run(args: Args) -> Result<()> {
         {
             cfg.log_level = l;
         }
-        if cfg.log_file.is_none() {
-            cfg.log_file = lf;
+        if let Some(xml_log) = lf {
+            cfg.log_file = Some(xml_log);
         }
         cfg.preserve_metadata = preserve_metadata;
         // Only set permissions flag if full metadata not requested (XML semantics mirror CLI precedence)

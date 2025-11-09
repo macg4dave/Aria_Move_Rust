@@ -108,14 +108,19 @@ pub fn load_config_from_xml() -> Option<LoadedConfig> {
         .log_level
         .as_deref()
         .and_then(|s| s.trim().parse::<LogLevel>().ok());
-    let log_file = parsed.log_file.as_deref().and_then(|s| {
-        let trimmed = s.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(PathBuf::from(trimmed))
-        }
-    });
+    // Only override the default log file if user specified a non-empty value.
+    // (If tag omitted or empty, we leave Config default in place during merge.)
+    let log_file = parsed
+        .log_file
+        .as_deref()
+        .and_then(|s| {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(trimmed))
+            }
+        });
     let preserve_metadata = parsed.preserve_metadata.unwrap_or(false);
     let preserve_permissions = parsed.preserve_permissions.unwrap_or(false);
     let disable_locks = parsed.disable_locks.unwrap_or(false);
@@ -133,8 +138,8 @@ pub fn load_config_from_xml() -> Option<LoadedConfig> {
         download_base.unwrap_or_else(|| PathBuf::from(DOWNLOAD_BASE_DEFAULT)),
         completed_base.unwrap_or_else(|| PathBuf::from(COMPLETED_BASE_DEFAULT)),
         log_level,
-        // best-effort default log path if not set
-        log_file.or_else(|| default_log_path().ok()),
+    // Do NOT inject a default here; leave Config::default() value intact unless user provided one.
+    log_file,
         preserve_metadata,
         preserve_permissions,
         disable_locks,

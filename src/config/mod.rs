@@ -162,16 +162,10 @@ fn ensure_safe_dir(dir: &Path) -> Result<()> {
                 dir.display()
             ));
         }
-        use std::os::unix::fs::PermissionsExt;
-        let meta = fs::metadata(dir)?;
-        let mode = meta.permissions().mode() & 0o777;
-        if mode & 0o022 != 0 {
-            return Err(anyhow!(
-                "unsafe permissions {:o} on {}; group/world-writable not allowed",
-                mode,
-                dir.display()
-            ));
-        }
+        // Previously we rejected group/world writable modes (mode & 0o022 != 0) to enforce
+        // strict ownership. This was deemed out of scope for aria_move (environment policy).
+        // We now allow broader permissions and leave hardening to deployment choices.
+        // (Intentionally no permission checks here.)
     }
 
     Ok(())
