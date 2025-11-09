@@ -11,7 +11,7 @@ use std::fs::{self};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::config::types::Config;
 use crate::errors::AriaMoveError;
@@ -34,7 +34,24 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
     }
 
     // Serialize on this source and ensure it's stable (size/mtime unchanged briefly).
-    let _move_lock = acquire_move_lock(src)?;
+    // Optional: allow disabling locks for environments where directory flock is denied.
+    let disable_locks = std::env::var("ARIA_MOVE_DISABLE_LOCKS").ok().as_deref() == Some("1");
+    let _move_lock: Option<super::lock::DirLock> = if disable_locks {
+        debug!(src = %src.display(), "locks disabled via ARIA_MOVE_DISABLE_LOCKS=1 (source)");
+        None
+    } else {
+        match acquire_move_lock(src) {
+            Ok(l) => Some(l),
+            Err(e) => {
+                if e.kind() == io::ErrorKind::PermissionDenied {
+                    debug!(error = %e, src = %src.display(), "acquire_move_lock permission denied; proceeding without lock (diagnostic)");
+                    None
+                } else {
+                    return Err(e.into());
+                }
+            }
+        }
+    };
     ensure_not_base(&config.download_base, src)?;
     stable_file_probe(src, Duration::from_millis(200), 3)?;
 
@@ -42,8 +59,12 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
     let dest_dir = &config.completed_base;
 
     if !config.dry_run {
-        fs::create_dir_all(dest_dir)
-            .map_err(io_error_with_help("create destination directory", dest_dir))?;
+        if let Err(e) = fs::create_dir_all(dest_dir) {
+            if e.kind() == io::ErrorKind::PermissionDenied {
+                debug!(error = %e, dest = %dest_dir.display(), "create_dir_all permission denied");
+            }
+            return Err(io_error_with_help("create destination directory", dest_dir)(e));
+        }
     } else {
         // Dry-run: keep a light permission check to surface obvious issues without writing.
         info!(action = "mkdir -p", path = %dest_dir.display(), "dry-run");
@@ -72,8 +93,22 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
     }
 
     // Serialize finalization into completed_base to avoid races on destination naming and final rename.
-    let _dir_lock = acquire_dir_lock(dest_dir)
-        .with_context(|| format!("acquire lock for '{}'", dest_dir.display()))?;
+    let _dir_lock: Option<super::lock::DirLock> = if disable_locks {
+        debug!(dest = %dest_dir.display(), "locks disabled via ARIA_MOVE_DISABLE_LOCKS=1 (dest)");
+        None
+    } else {
+        match acquire_dir_lock(dest_dir) {
+            Ok(l) => Some(l),
+            Err(e) => {
+                if e.kind() == io::ErrorKind::PermissionDenied {
+                    debug!(error = %e, dest = %dest_dir.display(), "acquire_dir_lock permission denied; proceeding without lock (diagnostic)");
+                    None
+                } else {
+                    return Err(anyhow!("acquire lock for '{}': {}", dest_dir.display(), e));
+                }
+            }
+        }
+    };
 
     // Now decide final destination name while holding the directory lock.
     let file_name = src
@@ -122,16 +157,27 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
                 "falling back to copy"
             };
 
-            warn!(error = %e, hint, "Atomic rename failed, using safe copy+rename");
+            warn!(error = %e, hint, src = %src.display(), dest = %dest.display(), "Atomic rename failed, using safe copy+rename");
         }
     }
 
     // Before copying across filesystems, ensure the destination has enough space.
-    let src_size = fs::metadata(src)
-        .with_context(|| format!("stat source {}", src.display()))?
-        .len();
-    let available = check_disk_space(dest_dir)
-        .with_context(|| format!("check disk space at {}", dest_dir.display()))?;
+    let src_size = match fs::metadata(src) {
+        Ok(m) => m.len(),
+        Err(e) => {
+            if e.kind() == io::ErrorKind::PermissionDenied {
+                debug!(error = %e, src = %src.display(), "metadata stat permission denied");
+            }
+            return Err(anyhow!("stat source {}: {}", src.display(), e));
+        }
+    };
+    let available = match check_disk_space(dest_dir) {
+        Ok(av) => av,
+        Err(e) => {
+            debug!(error = %e, dest = %dest_dir.display(), "disk space check failed");
+            return Err(anyhow!("check disk space at {}: {}", dest_dir.display(), e));
+        }
+    };
     if available < src_size {
         return Err(AriaMoveError::InsufficientSpace {
             required: src_size as u128,

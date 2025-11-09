@@ -1,4 +1,5 @@
 use crate::shutdown;
+use anyhow::Context;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -134,8 +135,8 @@ pub(crate) fn stable_file_probe(
     attempts: usize,
 ) -> anyhow::Result<()> {
     let mut last_size = fs::metadata(path)
-        .map(|m| m.len())
-        .map_err(anyhow::Error::from)?;
+        .with_context(|| format!("stat {}", path.display()))?
+        .len();
     for _ in 0..attempts {
         if shutdown::is_requested() {
             return Err(anyhow::anyhow!("interrupted"));
@@ -145,8 +146,8 @@ pub(crate) fn stable_file_probe(
             return Err(anyhow::anyhow!("interrupted"));
         }
         let size = fs::metadata(path)
-            .map(|m| m.len())
-            .map_err(anyhow::Error::from)?;
+            .with_context(|| format!("stat {}", path.display()))?
+            .len();
         if size == last_size {
             // Stable for one interval; consider the file quiescent
             return Ok(());

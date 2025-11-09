@@ -25,14 +25,21 @@ cargo install cargo-deb --locked || true
 
 export PATH="$HOME/.cargo/bin:$PATH"
 
-# Build release
-cargo build --release --manifest-path Cargo.toml
+# Default: debug build + run tests. Optionally do a release build if packaging.
 
+# Debug build
+cargo build --manifest-path Cargo.toml
+
+# Run full test suite (workspace-aware flags kept simple for single-crate repo)
+cargo test --all-targets --manifest-path Cargo.toml
+
+# If requested, produce a release build and a .deb package
 if [ "${MAKE_DEB:-false}" = "true" ]; then
+  cargo build --release --manifest-path Cargo.toml
   # cargo-deb will produce a deb under target/debian/
   cargo deb --no-strip --no-build || true
 fi
 
-echo "Container build finished."
+echo "Container build finished (debug build + tests)."
 
 exit 0

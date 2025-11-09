@@ -1,0 +1,31 @@
+FROM rust:1.76-bullseye
+
+# Image whose layers cache Debian build dependencies and Cargo crates so repeated
+# host builds (via docker-build.sh) avoid re-downloading on every invocation.
+
+WORKDIR /work
+
+# Install system build dependencies (single layer; rarely changes)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+    build-essential pkg-config libssl-dev ca-certificates gnupg debhelper \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy only manifest files for dependency resolution (keep layer cache stable).
+# If Cargo.lock is absent, cargo fetch will generate it (non-fatal).
+COPY Cargo.toml deny.toml ./
+
+# Create a minimal src/ so cargo fetch doesn't complain about missing package.
+RUN mkdir -p src && printf 'fn main(){}\n' > src/main.rs
+
+# Pre-fetch dependencies to populate /usr/local/cargo/registry & git caches.
+# Allow failure (e.g., network hiccup) without breaking image build; fetch will
+# re-attempt when container runs.
+RUN cargo fetch || true
+
+# Pre-install cargo-deb (optional) so its compilation is cached.
+RUN cargo install cargo-deb --locked || true
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# No CMD: runtime script (docker-build-in-container.sh) handles build & tests.

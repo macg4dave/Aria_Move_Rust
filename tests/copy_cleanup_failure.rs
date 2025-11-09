@@ -6,6 +6,15 @@ use tempfile::tempdir;
 
 #[test]
 fn tmp_is_cleaned_on_rename_failure() {
+    // Skip on root: root can write into 0555 directories on many Unix systems,
+    // which defeats this test's premise (forcing a rename failure via perms).
+    unsafe {
+        if libc::geteuid() == 0 {
+            eprintln!("skipping: running as root");
+            return;
+        }
+    }
+
     let td = tempdir().unwrap();
     let src = td.path().join("src.txt");
     fs::write(&src, "hello").unwrap();

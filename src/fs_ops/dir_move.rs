@@ -29,8 +29,24 @@ pub fn move_dir(config: &Config, src_dir: &Path) -> Result<PathBuf> {
         bail!("shutdown requested");
     }
 
-    // Serialize operations on this source to avoid double-processing.
-    let _src_lock = acquire_move_lock(src_dir)?;
+    // Optional: disable locks via env for environments where directory flock returns EACCES.
+    let disable_locks = std::env::var("ARIA_MOVE_DISABLE_LOCKS").ok().as_deref() == Some("1");
+    let _src_lock: Option<super::lock::DirLock> = if disable_locks {
+        debug!(src = %src_dir.display(), "locks disabled via ARIA_MOVE_DISABLE_LOCKS=1 (source dir)");
+        None
+    } else {
+        match acquire_move_lock(src_dir) {
+            Ok(l) => Some(l),
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    debug!(error = %e, src = %src_dir.display(), "acquire_move_lock permission denied; proceeding without lock (diagnostic)");
+                    None
+                } else {
+                    return Err(e.into());
+                }
+            }
+        }
+    };
     ensure_not_base(&config.download_base, src_dir)?;
 
     // Compute the target path under completed_base.
@@ -49,8 +65,22 @@ pub fn move_dir(config: &Config, src_dir: &Path) -> Result<PathBuf> {
     }
 
     // Serialize moves that finalize into the same completed_base to avoid races.
-    let _dst_lock = acquire_dir_lock(&config.completed_base)
-        .with_context(|| format!("acquire lock for '{}'", config.completed_base.display()))?;
+    let _dst_lock: Option<super::lock::DirLock> = if disable_locks {
+        debug!(dest = %config.completed_base.display(), "locks disabled via ARIA_MOVE_DISABLE_LOCKS=1 (dest dir)");
+        None
+    } else {
+        match acquire_dir_lock(&config.completed_base) {
+            Ok(l) => Some(l),
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    debug!(error = %e, dest = %config.completed_base.display(), "acquire_dir_lock permission denied; proceeding without lock (diagnostic)");
+                    None
+                } else {
+                    return Err(anyhow!("acquire lock for '{}': {}", config.completed_base.display(), e));
+                }
+            }
+        }
+    };
 
     // Fast path: same-filesystem atomic directory rename.
     // Optional pre-detect of cross-device (Unix) to skip a failing rename.
