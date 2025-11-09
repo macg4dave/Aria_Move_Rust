@@ -159,10 +159,41 @@ pub fn run(args: Args) -> Result<()> {
             tracing::warn!(error = %e, "resume reconcile step failed; proceeding");
         }
         let maybe_src_owned = args.resolved_source();
-        // If user explicitly provided a directory, accept it directly (bypass file-only resolver)
+        // If user explicitly provided a path, allow directories directly, else resolve files.
+        // For files under download_base that belong to a multi-file directory (immediate child
+        // of download_base), promote the selection to that directory so the entire folder moves.
         let src_result: Result<std::path::PathBuf> = if let Some(p) = maybe_src_owned.as_deref() {
             match std::fs::symlink_metadata(p) {
                 Ok(meta) if meta.file_type().is_dir() => Ok(p.to_path_buf()),
+                Ok(meta) if meta.file_type().is_file() => {
+                    // Heuristic: if path is within download_base, move the top-level folder under download_base
+                    // instead of a single file (common for multi-file downloads).
+                    let abs_p = dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+                    let base = dunce::canonicalize(&cfg.download_base).unwrap_or_else(|_| cfg.download_base.clone());
+                    if abs_p.starts_with(&base) {
+                        // Find the immediate child under base
+                        let rel = abs_p.strip_prefix(&base).unwrap_or(&abs_p);
+                        if let Some(first) = rel.components().next() {
+                            use std::path::Component;
+                            if let Component::Normal(name) = first {
+                                let candidate = base.join(name);
+                                if candidate.is_dir() && candidate != abs_p {
+                                    // Promote to directory move
+                                    Ok(candidate)
+                                } else {
+                                    // Fall back to moving the file itself
+                                    Ok(p.to_path_buf())
+                                }
+                            } else {
+                                Ok(p.to_path_buf())
+                            }
+                        } else {
+                            Ok(p.to_path_buf())
+                        }
+                    } else {
+                        Ok(p.to_path_buf())
+                    }
+                }
                 _ => resolve_source_path(&cfg, Some(p)),
             }
         } else {
