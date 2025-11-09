@@ -94,24 +94,31 @@ pub(super) fn ensure_space_for_copy(dst_dir: &Path, required: u64) -> Result<(),
 #[cfg(unix)]
 pub(super) fn free_space_bytes(path: &Path) -> io::Result<u64> {
     use libc::statvfs;
+    use std::mem::MaybeUninit;
 
-    let mut s: statvfs = unsafe { std::mem::zeroed() };
+    let mut stat: MaybeUninit<statvfs> = MaybeUninit::uninit();
     let cpath = std::ffi::CString::new(path.as_os_str().as_bytes())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains NUL"))?;
 
-    let rc = unsafe { libc::statvfs(cpath.as_ptr(), &mut s) };
+    let rc = unsafe { libc::statvfs(cpath.as_ptr(), stat.as_mut_ptr()) };
     if rc != 0 {
         return Err(io::Error::last_os_error());
     }
 
+    let s = unsafe { stat.assume_init() };
+
     // On some platforms (e.g., older macOS), f_frsize may be 0; fall back to f_bsize.
-    // Use `u64::from` to avoid redundant casts where the underlying type is already u64.
-    let block_size: u64 = if s.f_frsize != 0 {
-        s.f_frsize
-    } else {
-        s.f_bsize
-    };
-    Ok(s.f_bavail.saturating_mul(block_size))
+    // Convert underlying C types into u64 for arithmetic.
+    fn block_size_u64(s: &statvfs) -> u64 {
+        if s.f_frsize != 0 {
+            s.f_frsize as u64
+        } else {
+            s.f_bsize as u64
+        }
+    }
+
+    let block_size = block_size_u64(&s);
+    Ok((s.f_bavail as u64).saturating_mul(block_size))
 }
 
 /// Return available free space (in bytes) on the filesystem hosting `path`.
