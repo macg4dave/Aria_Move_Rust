@@ -88,6 +88,13 @@ pub struct Args {
     )]
     pub preserve_permissions: bool,
 
+    /// Disable directory locking (for ZFS/NFS/network shares in containers where flock may fail).
+    #[arg(
+        long,
+        help = "Disable directory locking (use for ZFS/NFS/network shares in containers)"
+    )]
+    pub disable_locks: bool,
+
     /// Emit logs in structured JSON (includes timestamp, level, and structured fields).
     #[arg(long, help = "Emit logs in structured JSON")]
     pub json: bool,
@@ -192,6 +199,9 @@ impl Args {
         }
         if self.preserve_permissions {
             cfg.preserve_permissions = true;
+        }
+        if self.disable_locks {
+            cfg.disable_locks = true;
         }
     }
 }

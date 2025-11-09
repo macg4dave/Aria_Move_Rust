@@ -30,9 +30,10 @@ pub fn move_dir(config: &Config, src_dir: &Path) -> Result<PathBuf> {
     }
 
     // Optional: disable locks via env for environments where directory flock returns EACCES.
-    let disable_locks = std::env::var("ARIA_MOVE_DISABLE_LOCKS").ok().as_deref() == Some("1");
+    let disable_locks = config.disable_locks
+        || std::env::var("ARIA_MOVE_DISABLE_LOCKS").ok().as_deref() == Some("1");
     let _src_lock: Option<super::lock::DirLock> = if disable_locks {
-        debug!(src = %src_dir.display(), "locks disabled via ARIA_MOVE_DISABLE_LOCKS=1 (source dir)");
+        debug!(src = %src_dir.display(), "locks disabled via config or ARIA_MOVE_DISABLE_LOCKS=1 (source dir)");
         None
     } else {
         match acquire_move_lock(src_dir) {
@@ -66,7 +67,7 @@ pub fn move_dir(config: &Config, src_dir: &Path) -> Result<PathBuf> {
 
     // Serialize moves that finalize into the same completed_base to avoid races.
     let _dst_lock: Option<super::lock::DirLock> = if disable_locks {
-        debug!(dest = %config.completed_base.display(), "locks disabled via ARIA_MOVE_DISABLE_LOCKS=1 (dest dir)");
+        debug!(dest = %config.completed_base.display(), "locks disabled via config or ARIA_MOVE_DISABLE_LOCKS=1 (dest dir)");
         None
     } else {
         match acquire_dir_lock(&config.completed_base) {
@@ -76,7 +77,11 @@ pub fn move_dir(config: &Config, src_dir: &Path) -> Result<PathBuf> {
                     debug!(error = %e, dest = %config.completed_base.display(), "acquire_dir_lock permission denied; proceeding without lock (diagnostic)");
                     None
                 } else {
-                    return Err(anyhow!("acquire lock for '{}': {}", config.completed_base.display(), e));
+                    return Err(anyhow!(
+                        "acquire lock for '{}': {}",
+                        config.completed_base.display(),
+                        e
+                    ));
                 }
             }
         }

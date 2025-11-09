@@ -72,6 +72,8 @@ pub struct Config {
     pub preserve_metadata: bool,
     /// If true, preserve only permissions (mode / readonly). Ignored if preserve_metadata is true.
     pub preserve_permissions: bool,
+    /// If true, disable directory locking (for ZFS/NFS/network shares in containers)
+    pub disable_locks: bool,
     // Single switch: when true, preserve all available metadata (times, perms, readonly, xattrs).
     // When false, preserve nothing.
     // (auto-pick recency window removed; explicit source path required)
@@ -88,6 +90,7 @@ impl Default for Config {
             dry_run: false,
             preserve_metadata: false,
             preserve_permissions: false,
+            disable_locks: false,
             // no auto-pick window
         }
     }

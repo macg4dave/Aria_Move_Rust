@@ -35,9 +35,10 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
 
     // Serialize on this source and ensure it's stable (size/mtime unchanged briefly).
     // Optional: allow disabling locks for environments where directory flock is denied.
-    let disable_locks = std::env::var("ARIA_MOVE_DISABLE_LOCKS").ok().as_deref() == Some("1");
+    let disable_locks = config.disable_locks
+        || std::env::var("ARIA_MOVE_DISABLE_LOCKS").ok().as_deref() == Some("1");
     let _move_lock: Option<super::lock::DirLock> = if disable_locks {
-        debug!(src = %src.display(), "locks disabled via ARIA_MOVE_DISABLE_LOCKS=1 (source)");
+        debug!(src = %src.display(), "locks disabled via config or ARIA_MOVE_DISABLE_LOCKS=1 (source)");
         None
     } else {
         match acquire_move_lock(src) {
@@ -94,7 +95,7 @@ pub fn move_file(config: &Config, src: &Path) -> Result<PathBuf> {
 
     // Serialize finalization into completed_base to avoid races on destination naming and final rename.
     let _dir_lock: Option<super::lock::DirLock> = if disable_locks {
-        debug!(dest = %dest_dir.display(), "locks disabled via ARIA_MOVE_DISABLE_LOCKS=1 (dest)");
+        debug!(dest = %dest_dir.display(), "locks disabled via config or ARIA_MOVE_DISABLE_LOCKS=1 (dest)");
         None
     } else {
         match acquire_dir_lock(dest_dir) {

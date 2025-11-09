@@ -39,6 +39,8 @@ struct XmlConfig {
     preserve_metadata: Option<bool>,
     #[serde(rename = "preserve_permissions")]
     preserve_permissions: Option<bool>,
+    #[serde(rename = "disable_locks")]
+    disable_locks: Option<bool>,
 }
 
 // Reduce visual complexity of the return type used by load_config_from_xml().
@@ -49,6 +51,7 @@ type LoadedConfig = (
     Option<PathBuf>,  // log_file
     bool,             // preserve_metadata
     bool,             // preserve_permissions
+    bool,             // disable_locks
 );
 
 /// Read config from XML. OS-aware default path used if ARIA_MOVE_CONFIG not set.
@@ -115,6 +118,7 @@ pub fn load_config_from_xml() -> Option<LoadedConfig> {
     });
     let preserve_metadata = parsed.preserve_metadata.unwrap_or(false);
     let preserve_permissions = parsed.preserve_permissions.unwrap_or(false);
+    let disable_locks = parsed.disable_locks.unwrap_or(false);
 
     // If no meaningful settings were provided, treat as "no config" so callers can use defaults.
     if download_base.is_none()
@@ -133,6 +137,7 @@ pub fn load_config_from_xml() -> Option<LoadedConfig> {
         log_file.or_else(|| default_log_path().ok()),
         preserve_metadata,
         preserve_permissions,
+        disable_locks,
     ))
 }
 
@@ -162,6 +167,7 @@ pub fn create_template_config(path: &Path) -> Result<()> {
     Boolean flags (true/false):
         preserve_metadata      -> copy permissions + timestamps (+ xattrs when feature enabled)
         preserve_permissions   -> copy only permissions (mode on Unix, readonly on Windows)
+        disable_locks          -> disable directory locking (for ZFS/NFS/network shares in containers)
 
     Other fields:
         download_base          -> directory where new/partial downloads appear
@@ -172,6 +178,7 @@ pub fn create_template_config(path: &Path) -> Result<()> {
     Notes:
         - CLI flags override XML values.
         - Setting preserve_metadata implies permissions; preserve_permissions is ignored if preserve_metadata=true.
+        - Set disable_locks=true only if you encounter "Permission denied (os error 13)" on ZFS/NFS shares in containers.
 -->
 <config>
     <download_base>{}</download_base>
@@ -180,6 +187,7 @@ pub fn create_template_config(path: &Path) -> Result<()> {
     <log_file>{}</log_file>
     <preserve_metadata>false</preserve_metadata>
     <preserve_permissions>false</preserve_permissions>
+    <disable_locks>false</disable_locks>
 </config>
 "#,
         DOWNLOAD_BASE_DEFAULT, COMPLETED_BASE_DEFAULT, suggested_log
@@ -257,6 +265,7 @@ fn xml_to_config(parsed: XmlConfig) -> Config {
     } else {
         parsed.preserve_permissions.unwrap_or(false)
     };
+    let disable_locks = parsed.disable_locks.unwrap_or(false);
     Config {
         download_base,
         completed_base,
@@ -265,6 +274,7 @@ fn xml_to_config(parsed: XmlConfig) -> Config {
         dry_run: false,
         preserve_metadata,
         preserve_permissions,
+        disable_locks,
     }
 }
 

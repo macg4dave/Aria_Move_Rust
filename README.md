@@ -286,7 +286,48 @@ export ARIA_MOVE_CONFIG=/custom/path/config.xml
 | **"Refusing to use log path with symlink"** (Unix) | Choose a log directory without symlinks in its path |
 | **"Not enough free space"** | Free space check happens before cross-device copy; ensure destination has room |
 | **Windows "Access denied"** | Close any programs viewing the file; retry |
+| **"os error 13" on ZFS/NFS/network shares in containers** | Use `--disable-locks` flag or set `disable_locks=true` in config.xml (see below) |
 | **Need more logs** | Use `--log-level debug` or `--json` |
+
+### Special filesystems (ZFS, NFS, network shares in containers)
+
+Some filesystems or container environments may not support directory-level locking operations (`flock` on Unix), resulting in "Permission denied (os error 13)" errors even with correct file permissions. This commonly occurs with:
+
+- ZFS datasets mounted in Linux containers (Docker, LXC)
+- NFS/CIFS/SMB network shares
+- Certain cloud storage mounts
+
+**Workaround**: Disable directory locking using any of these methods:
+
+1. **Command-line flag** (recommended):
+   ```bash
+   aria_move --disable-locks /path/to/file
+   ```
+
+2. **XML configuration file**:
+   ```xml
+   <config>
+       <!-- other settings... -->
+       <disable_locks>true</disable_locks>
+   </config>
+   ```
+
+3. **Environment variable** (legacy):
+   ```bash
+   # One-time usage
+   ARIA_MOVE_DISABLE_LOCKS=1 aria_move /path/to/file
+
+   # Persistent for user session
+   export ARIA_MOVE_DISABLE_LOCKS=1
+
+   # In systemd service (see systemd integration section)
+   Environment="ARIA_MOVE_DISABLE_LOCKS=1"
+
+   # In Docker/container
+   docker run -e ARIA_MOVE_DISABLE_LOCKS=1 ...
+   ```
+
+**Note**: Disabling locks removes protection against concurrent operations on the same files. Only use this if you control the environment and ensure aria_move isn't run concurrently on the same paths.
 
 ---
 
@@ -308,6 +349,7 @@ aria_move [OPTIONS] [TASK_ID] [NUM_FILES] [SOURCE_PATH]
 | `--json` | Output logs in JSON format |
 | `--preserve-metadata` | Preserve permissions, timestamps, xattrs (slower) |
 | `--preserve-permissions` | Preserve only permissions (faster) |
+| `--disable-locks` | Disable directory locking (for ZFS/NFS/network shares in containers) |
 | `--print-config` | Show config file path and exit |
 | `-h, --help` | Show help |
 | `-V, --version` | Show version |
