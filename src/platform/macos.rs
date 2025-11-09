@@ -8,23 +8,19 @@ use std::io;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
-/// Open log file for appending with 0600 permissions (macOS variant, identical to Unix).
+/// Open log file for appending. Set 0600 only when creating a new file; preserve existing mode.
 pub fn open_log_file_secure_append(path: &Path) -> io::Result<File> {
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    // Best-effort hardening: use std OpenOptions with mode(0600), then correct perms.
-    // TODO(macos): consider libc::open with O_NOFOLLOW|O_CLOEXEC for stricter security.
+    let existed = path.exists();
     let f = OpenOptions::new()
         .create(true)
         .append(true)
-        .mode(0o600)
+        .mode(0o600) // applied on create
         .open(path)?;
-    if let Ok(m) = f.metadata() {
-        let current = m.permissions().mode() & 0o777;
-        if current != 0o600 {
-            let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
-        }
+    if !existed {
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
     }
     Ok(f)
 }
@@ -77,11 +73,21 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn enforce_log_file_mode() {
+    fn preserve_existing_log_file_mode() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("log.txt");
         fs::write(&path, b"hello").unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+        let _f = open_log_file_secure_append(&path).unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o640);
+    }
+
+    #[test]
+    fn new_log_file_gets_0600() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("new_log.txt");
+        assert!(!path.exists());
         let _f = open_log_file_secure_append(&path).unwrap();
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);

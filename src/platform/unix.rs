@@ -7,23 +7,22 @@ use std::io::{self};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
-/// Open log file for appending with 0600 permissions.
+/// Open log file for appending; set 0600 only when creating a new file.
+/// If the file already exists, we preserve its existing permissions to avoid
+/// clobbering administrator adjustments (e.g. group-readable for log shipping).
 pub fn open_log_file_secure_append(path: &Path) -> io::Result<File> {
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
+    let existed = path.exists();
     let f = OpenOptions::new()
         .create(true)
         .append(true)
-        .mode(0o600)
+        .mode(0o600) // applies on create
         .open(path)?;
-    // Enforce 0600 even if file pre-existed with different mode.
-    let meta = f.metadata();
-    if let Ok(m) = meta {
-        let current = m.permissions().mode() & 0o777;
-        if current != 0o600 {
-            let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
-        }
+    if !existed {
+        // Newly created: ensure 0600
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
     }
     Ok(f)
 }
@@ -79,15 +78,25 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn enforce_log_file_mode() {
+    fn preserve_existing_log_file_mode() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("log.txt");
-        // Pre-create with loose perms.
         fs::write(&path, b"hello").unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+        let _f = open_log_file_secure_append(&path).unwrap();
+        // Mode should remain 0640 (not forced to 0600) because file pre-existed.
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o640, "existing permissions should be preserved");
+    }
+
+    #[test]
+    fn new_log_file_gets_0600() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("new_log.txt");
+        assert!(!path.exists());
         let _f = open_log_file_secure_append(&path).unwrap();
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600);
+        assert_eq!(mode, 0o600, "newly created log file should be 0600");
     }
 
     #[test]
