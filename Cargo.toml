@@ -15,7 +15,6 @@ clap = { version = "4.2", features = ["derive"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3", features = [
     "fmt",
-    "env-filter",
     "json",
 ] }
 tracing-appender = "0.2"

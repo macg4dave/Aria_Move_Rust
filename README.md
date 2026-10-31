@@ -148,15 +148,9 @@ You can now pass a config path via CLI:
 aria_move --config /etc/aria_move/config.xml --print-config
 ```
 
-This flag takes precedence over `ARIA_MOVE_CONFIG` and user defaults. The service user must have read access to the config and write access (if logging to file). If unreadable, defaults are used and moves may be refused due to missing base directories.
-
-```
-
-Add to `aria2.conf`:
-
-```ini
-on-download-complete=C:\Tools\aria_move_hook.bat
-```
+This flag takes precedence over `ARIA_MOVE_CONFIG` and user defaults. An existing
+config that cannot be read or parsed is an error. The service user needs read
+access to the config and write access to its log directory.
 
 **Important**: Use absolute paths. Test the wrapper manually before enabling in aria2.
 
@@ -224,7 +218,7 @@ Type=simple
 User=aria2
 Group=aria2
 RemainAfterExit=yes
-ExecStart=/usr/bin/aria2c --console-log-level=warn --conf-path=/etc/aria2/aria.conf
+ExecStart=/usr/bin/aria2c --console-log-level=warn --conf-path=/etc/aria2/aria2.conf
 ExecReload=/usr/bin/kill -HUP $MAINPID
 RestartSec=1min
 Restart=on-failure
@@ -409,8 +403,9 @@ cargo install --path .
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
-cargo test --all --no-fail-fast
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-targets --all-features
+cargo test --workspace --doc --all-features
 ```
 
 ---
@@ -492,7 +487,8 @@ GitHub build and release automation has been removed. Build locally with
 Local packaging helpers are retained:
 
 - `scripts/release-dry-run.sh` uses cargo-dist without uploading artifacts.
-- `scripts/docker-build.sh --deb` builds and tests in Docker and requests a Debian package.
+- `scripts/docker-build.sh --deb` builds in Docker and requests a Debian package.
+- `scripts/test-linux.sh` runs checks and tests on Linux x86_64 and ARM64 in Docker.
 - `scripts/cross-build.sh <target> --release` uses cross for local cross builds.
 
 - `scripts/package-macos-universal.sh` combines native Intel/ARM builds with lipo.

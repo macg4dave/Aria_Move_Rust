@@ -43,6 +43,8 @@ fn locate(config: &Config, path: &Path) -> Result<PathBuf> {
     if !meta.is_file() && !meta.is_dir() {
         return Err(AriaMoveError::ProvidedNotFile(selected).into());
     }
+    // Check before canonicalization can erase a linked ancestor during promotion.
+    platform::reject_symlinks(&selected)?;
     Ok(selected)
 }
 
@@ -223,6 +225,22 @@ mod tests {
                 base.join("'name'")
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linked_ancestors_are_rejected_before_promotion() {
+        let (_temp, cfg) = fixture();
+        fs::create_dir_all(cfg.download_base.join("album/disc")).unwrap();
+        fs::write(cfg.download_base.join("album/disc/track"), b"keep").unwrap();
+        std::os::unix::fs::symlink(
+            cfg.download_base.join("album/disc"),
+            cfg.download_base.join("alias"),
+        )
+        .unwrap();
+        let error =
+            resolve_source_path(&cfg, Some(&cfg.download_base.join("alias/track"))).unwrap_err();
+        assert!(error.to_string().contains("symlink"), "{error:#}");
     }
 
     #[cfg(unix)]

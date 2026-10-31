@@ -7,7 +7,7 @@ use tracing::Subscriber;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::fmt::{self, MakeWriter, format::Writer, time::FormatTime};
 use tracing_subscriber::{
-    EnvFilter, Layer, layer::SubscriberExt, registry::LookupSpan, util::SubscriberInitExt,
+    Layer, layer::SubscriberExt, registry::LookupSpan, util::SubscriberInitExt,
 };
 
 struct LocalTime;
@@ -59,7 +59,7 @@ pub fn init(level: LogLevel, log_file: Option<&Path>, json: bool) -> Result<Opti
     };
     let ansi = !json && output::color_enabled(std::io::stdout().is_terminal());
     tracing_subscriber::registry()
-        .with(EnvFilter::new(level.filter()))
+        .with(level.filter())
         .with(layer(std::io::stdout, json, ansi))
         .with(file_layer)
         .try_init()?;

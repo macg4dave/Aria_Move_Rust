@@ -9,14 +9,15 @@
 //!    and only then remove the source, entry by entry.
 //!
 //! An existing destination is never replaced; a free name is chosen instead.
-//! Once a copy is published, any later failure leaves both copies in place.
+//! Once a copy is published, any later failure keeps the destination and any
+//! source entries not yet removed.
 
 use super::transfer::{self, Snapshot};
 use super::{lock, metadata, naming, space};
 use crate::{Config, errors, platform, shutdown};
 use anyhow::{Context, Result, bail, ensure};
 use rayon::prelude::*;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -50,14 +51,16 @@ fn move_with(config: &Config, src: &Path, force_copy: bool) -> Result<PathBuf> {
     let candidate = config.completed_base.join(name);
     if config.dry_run {
         inventory(src)?;
-        return Ok(naming::unique_destination(&candidate));
+        return naming::unique_destination(&candidate)
+            .map_err(|e| errors::io_error("select destination", &candidate, e));
     }
     platform::create_directory(&config.completed_base)
         .map_err(|e| errors::io_error("create completed_base", &config.completed_base, e))?;
     let _locks = lock::acquire_move_locks(src, &config.completed_base, config.disable_locks)?;
     validate_source(config, src)?;
     let entries = stable_inventory(src, || shutdown::pause(STABILITY_INTERVAL))?;
-    let dest = naming::unique_destination(&candidate);
+    let dest = naming::unique_destination(&candidate)
+        .map_err(|e| errors::io_error("select destination", &candidate, e))?;
     if !force_copy && rename(src, &dest)? {
         tracing::debug!(dest = %dest.display(), "moved by rename");
         return Ok(dest);
@@ -127,6 +130,15 @@ fn is_incomplete(path: &Path) -> bool {
 /// Every entry under `root` (root first, parents before children), rejecting
 /// links, special files and in-progress names.
 fn inventory(root: &Path) -> Result<Vec<Entry>> {
+    // aria2 stores single-file progress beside the data, not inside it.
+    let mut control = root.as_os_str().to_owned();
+    control.push(".aria2");
+    let control = PathBuf::from(control);
+    match fs::symlink_metadata(&control) {
+        Ok(_) => bail!("'{}' looks like an unfinished download", root.display()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(errors::io_error("inspect control file", &control, error)),
+    }
     let mut entries = Vec::new();
     for item in walkdir::WalkDir::new(root)
         .follow_links(false)
@@ -145,12 +157,7 @@ fn inventory(root: &Path) -> Result<Vec<Entry>> {
         if !directory && is_incomplete(path) {
             bail!("'{}' looks like an unfinished download", path.display());
         }
-        let handle = if directory {
-            platform::open_directory(path)
-        } else {
-            platform::open_regular_read(path)
-        }
-        .map_err(|e| errors::io_error("open", path, e))?;
+        let handle = open_entry(path, directory)?;
         entries.push(Entry {
             relative: path.strip_prefix(root)?.to_path_buf(),
             directory,
@@ -158,6 +165,30 @@ fn inventory(root: &Path) -> Result<Vec<Entry>> {
         });
     }
     Ok(entries)
+}
+
+fn open_entry(path: &Path, directory: bool) -> Result<File> {
+    if directory {
+        platform::open_directory(path)
+    } else {
+        platform::open_regular_read(path)
+    }
+    .map_err(|e| errors::io_error("open", path, e))
+}
+
+/// Recheck each entry immediately before removal: a whole-tree check can be
+/// stale by the time a large cleanup reaches this entry. Never recurse.
+fn remove_entry(source: &Path, entry: &Entry) -> Result<()> {
+    let handle = open_entry(source, entry.directory)?;
+    entry.snapshot.check(&handle, source)?;
+    // Windows read handles deny deletion, so release after checking identity.
+    drop(handle);
+    if entry.directory {
+        fs::remove_dir(source)
+    } else {
+        platform::remove_file(source)
+    }
+    .map_err(|e| errors::io_error("remove source", source, e))
 }
 
 /// An inventory that did not change across a pause; downloads still being
@@ -276,7 +307,7 @@ fn copy_then_remove(config: &Config, src: &Path, dest: &Path, entries: &[Entry])
     platform::sync_directory(&config.completed_base)?;
     tracing::debug!(dest = %dest.display(), "verified copy published");
 
-    // Published: from here on, failures retain the source for inspection.
+    // Published: failures keep the destination and remaining source entries.
     let retained = || {
         format!(
             "published {}; source {} retained",
@@ -292,13 +323,7 @@ fn copy_then_remove(config: &Config, src: &Path, dest: &Path, entries: &[Entry])
     for entry in entries.iter().rev() {
         shutdown::check().with_context(retained)?;
         let source = at(src, &entry.relative);
-        let removed = if entry.directory {
-            // Never recursive: anything unexpected inside makes this fail.
-            fs::remove_dir(&source)
-        } else {
-            platform::remove_file(&source)
-        };
-        removed.with_context(|| {
+        remove_entry(&source, entry).with_context(|| {
             format!(
                 "published {}; cannot remove source {}",
                 dest.display(),
@@ -489,6 +514,31 @@ mod tests {
     }
 
     #[test]
+    fn adjacent_aria2_control_files_block_files_and_trees() -> Result<()> {
+        let _guard = shutdown::test_guard();
+        for force_copy in STRATEGIES {
+            for dry_run in [false, true] {
+                let mut fx = Fixture::new();
+                fx.config.dry_run = dry_run;
+                fx.write("file.bin", b"partial");
+                fx.write("tree/child", b"partial");
+                for name in ["file.bin", "tree"] {
+                    let control = fx.write(&format!("{name}.aria2"), b"progress");
+                    let error = move_with(&fx.config, &fx.incoming(name), force_copy).unwrap_err();
+                    assert!(
+                        error.to_string().contains("unfinished download"),
+                        "{error:#}"
+                    );
+                    assert!(fx.incoming(name).exists());
+                    assert_eq!(fs::read(control)?, b"progress");
+                }
+                assert!(fx.completed_names().is_empty());
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn invalid_sources_are_rejected() -> Result<()> {
         let _guard = shutdown::test_guard();
         let fx = Fixture::new();
@@ -510,12 +560,16 @@ mod tests {
         assert!(move_entry(&nested, &fx.incoming("tree")).is_err());
         let unset = Config::default();
         let error = move_entry(&unset, &fx.write("file", b"x")).unwrap_err();
-        assert!(error.to_string().contains("completed_base is not set"), "{error}");
+        assert!(
+            error.to_string().contains("completed_base is not set"),
+            "{error}"
+        );
         Ok(())
     }
 
     #[test]
     fn stability_waits_for_changes_to_stop() -> Result<()> {
+        let _guard = shutdown::test_guard();
         let fx = Fixture::new();
         let file = fx.write("growing", b"1");
         let mut writes = 0;
@@ -548,6 +602,32 @@ mod tests {
         assert_eq!(errors::error_code(&error), "interrupted");
         assert_eq!(fs::read(src)?, b"data");
         assert!(fx.completed_names().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn cleanup_refuses_changed_or_replaced_entries() -> Result<()> {
+        let _guard = shutdown::test_guard();
+        let fx = Fixture::new();
+        let source = fx.write("file", b"original");
+        let entries = inventory(&source)?;
+        fs::write(&source, b"changed contents")?;
+        assert!(remove_entry(&source, &entries[0]).is_err());
+        assert_eq!(fs::read(&source)?, b"changed contents");
+
+        let entries = inventory(&source)?;
+        let replacement = fx.write("replacement", b"changed contents");
+        fs::remove_file(&source)?;
+        fs::rename(replacement, &source)?;
+        assert!(remove_entry(&source, &entries[0]).is_err());
+        assert_eq!(fs::read(&source)?, b"changed contents");
+
+        fs::create_dir(fx.incoming("directory"))?;
+        let directory = fx.incoming("directory");
+        let entries = inventory(&directory)?;
+        fs::write(directory.join("unexpected"), b"keep")?;
+        assert!(remove_entry(&directory, &entries[0]).is_err());
+        assert_eq!(fs::read(directory.join("unexpected"))?, b"keep");
         Ok(())
     }
 

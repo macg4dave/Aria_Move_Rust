@@ -25,6 +25,9 @@ for arch in "${ARCHES[@]}"; do
     --mount "type=volume,source=aria_move_registry_$arch,target=/usr/local/cargo/registry" \
     "$IMAGE" bash -euo pipefail -c '
       rustup component add rustfmt clippy >/dev/null 2>&1
+      # Use the image toolchain instead of downloading another copy via the
+      # stable override in the repository when switching to the test user.
+      TEST_TOOLCHAIN=$(rustup show active-toolchain | cut -d " " -f 1)
       chmod -R a+rwX /usr/local/cargo
       useradd --create-home --shell /bin/bash tester
       mkdir /home/tester/work
@@ -32,7 +35,7 @@ for arch in "${ARCHES[@]}"; do
       chown -R tester /home/tester/work
       su tester -c "
         set -euo pipefail
-        export PATH=/usr/local/cargo/bin:\$PATH CARGO_HOME=/usr/local/cargo RUSTUP_HOME=/usr/local/rustup
+        export PATH=/usr/local/cargo/bin:\$PATH CARGO_HOME=/usr/local/cargo RUSTUP_HOME=/usr/local/rustup RUSTUP_TOOLCHAIN=$TEST_TOOLCHAIN
         cd ~/work
         echo \"arch: \$(uname -m), uid: \$(id -u)\"
         cargo fmt --all -- --check
@@ -40,6 +43,7 @@ for arch in "${ARCHES[@]}"; do
         cargo clippy --locked --all-targets --all-features -- -D warnings
         cargo test --locked --all-targets
         cargo test --locked --all-targets --all-features
+        cargo test --locked --doc --all-features
       "
     '
 done

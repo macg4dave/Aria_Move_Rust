@@ -2,13 +2,14 @@
 //! a single positional argument is treated as the path.
 use crate::config::{Config, LogLevel};
 use clap::{Parser, ValueHint};
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about = "Move completed aria2 downloads safely")]
 pub struct Args {
     /// aria2 GID (informational). Alone, it is taken as the source path.
-    pub task_id: Option<String>,
+    pub task_id: Option<OsString>,
 
     /// Number of files reported by aria2 (informational).
     pub num_files: Option<usize>,
@@ -69,14 +70,14 @@ pub struct Args {
 impl Args {
     /// `--source-path`, else the positional SOURCE_PATH, else a lone first
     /// positional (`aria_move <path>`).
-    pub fn resolved_source(&self) -> Option<PathBuf> {
+    pub fn resolved_source(&self) -> Option<&Path> {
         self.source_path
-            .clone()
-            .or_else(|| self.source_path_pos.clone())
+            .as_deref()
+            .or(self.source_path_pos.as_deref())
             .or_else(|| {
                 self.num_files
                     .is_none()
-                    .then(|| self.task_id.as_ref().map(PathBuf::from))
+                    .then(|| self.task_id.as_deref().map(Path::new))
                     .flatten()
             })
     }
@@ -132,7 +133,7 @@ mod tests {
         for (args, expected) in cases {
             assert_eq!(
                 parse(args).resolved_source(),
-                expected.map(PathBuf::from),
+                expected.map(Path::new),
                 "{args:?}"
             );
         }

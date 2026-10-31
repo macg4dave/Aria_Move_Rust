@@ -26,13 +26,14 @@ pub enum LogLevel {
 }
 
 impl LogLevel {
-    /// The tracing filter directive for this level.
-    pub fn filter(self) -> &'static str {
+    /// The tracing threshold for this level.
+    pub fn filter(self) -> tracing::level_filters::LevelFilter {
+        use tracing::level_filters::LevelFilter;
         match self {
-            Self::Quiet => "error",
-            Self::Normal => "info",
-            Self::Info => "debug",
-            Self::Debug => "trace",
+            Self::Quiet => LevelFilter::ERROR,
+            Self::Normal => LevelFilter::INFO,
+            Self::Info => LevelFilter::DEBUG,
+            Self::Debug => LevelFilter::TRACE,
         }
     }
 }

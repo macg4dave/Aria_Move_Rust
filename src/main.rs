@@ -64,7 +64,7 @@ fn run(args: Args) -> Result<()> {
 fn execute(args: &Args, cfg: &mut config::Config) -> Result<()> {
     shutdown::check()?;
     config::validate_and_normalize(cfg)?;
-    let src = aria_move::resolve_source_path(cfg, args.resolved_source().as_deref())?;
+    let src = aria_move::resolve_source_path(cfg, args.resolved_source())?;
     let dest = aria_move::move_entry(cfg, &src)?;
     if cfg.dry_run && !args.json {
         output::print_info(&format!(

@@ -4,6 +4,7 @@
 //! a name that is free now.
 
 use std::ffi::{OsStr, OsString};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -14,9 +15,9 @@ const MAX_NAME_UNITS: usize = 240;
 const MAX_NAME_UNITS: usize = 255;
 
 /// `candidate` if nothing exists there, else a suffixed sibling that is free.
-pub(super) fn unique_destination(candidate: &Path) -> PathBuf {
-    if is_free(candidate) {
-        return candidate.to_path_buf();
+pub(super) fn unique_destination(candidate: &Path) -> io::Result<PathBuf> {
+    if is_free(candidate)? {
+        return Ok(candidate.to_path_buf());
     }
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -25,21 +26,26 @@ pub(super) fn unique_destination(candidate: &Path) -> PathBuf {
     let tag = format!("-{millis}-{}", std::process::id());
     let stem = candidate.file_stem().unwrap_or(OsStr::new("file"));
     let ext = candidate.extension();
-    (1u64..)
-        .map(|n| {
-            let suffix = if n == 1 {
-                tag.clone()
-            } else {
-                format!("{tag}-{n}")
-            };
-            candidate.with_file_name(name_with_suffix(stem, ext, &suffix))
-        })
-        .find(|path| is_free(path))
-        .expect("a finite directory cannot hold every suffix")
+    for n in 1u64.. {
+        let suffix = if n == 1 {
+            tag.clone()
+        } else {
+            format!("{tag}-{n}")
+        };
+        let path = candidate.with_file_name(name_with_suffix(stem, ext, &suffix));
+        if is_free(&path)? {
+            return Ok(path);
+        }
+    }
+    Err(io::Error::other("destination suffixes exhausted"))
 }
 
-fn is_free(path: &Path) -> bool {
-    std::fs::symlink_metadata(path).is_err()
+fn is_free(path: &Path) -> io::Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(false),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(error),
+    }
 }
 
 fn units(s: &OsStr) -> usize {
@@ -116,10 +122,25 @@ mod tests {
     use std::fs;
 
     #[test]
+    fn invalid_paths_are_errors_not_free_names() {
+        let error = unique_destination(Path::new("invalid\0name")).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_links_are_occupied() {
+        let temp = tempfile::tempdir().unwrap();
+        let candidate = temp.path().join("link");
+        std::os::unix::fs::symlink(temp.path().join("missing"), &candidate).unwrap();
+        assert_ne!(unique_destination(&candidate).unwrap(), candidate);
+    }
+
+    #[test]
     fn free_names_are_kept() {
         let temp = tempfile::tempdir().unwrap();
         let candidate = temp.path().join("movie.mkv");
-        assert_eq!(unique_destination(&candidate), candidate);
+        assert_eq!(unique_destination(&candidate).unwrap(), candidate);
     }
 
     #[test]
@@ -134,7 +155,7 @@ mod tests {
         ] {
             let candidate = temp.path().join(name);
             fs::write(&candidate, b"existing").unwrap();
-            let unique = unique_destination(&candidate);
+            let unique = unique_destination(&candidate).unwrap();
             let unique = unique.file_name().unwrap().to_str().unwrap();
             assert!(unique.starts_with(stem), "{unique}");
             assert!(unique.contains(&tag), "{unique}");
@@ -150,11 +171,11 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let candidate = temp.path().join("a.txt");
         fs::write(&candidate, b"").unwrap();
-        let first = unique_destination(&candidate);
+        let first = unique_destination(&candidate).unwrap();
         fs::write(&first, b"").unwrap();
-        let second = unique_destination(&candidate);
+        let second = unique_destination(&candidate).unwrap();
         assert_ne!(first, second);
-        assert!(is_free(&second));
+        assert!(is_free(&second).unwrap());
     }
 
     #[test]

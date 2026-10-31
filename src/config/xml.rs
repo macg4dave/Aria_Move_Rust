@@ -1,7 +1,8 @@
 //! The `config.xml` format: strict parsing and the first-run template.
 use super::{Config, LogLevel};
 use crate::platform;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
+use quick_xml::{Reader, events::Event};
 use serde::Deserialize;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -49,6 +50,41 @@ pub fn load_config(path: &Path) -> Result<Config> {
 }
 
 fn parse(contents: &str) -> Result<Config> {
+    // Serde maps fields but does not enforce the document root or consume
+    // trailing content. Validate the complete XML envelope before decoding.
+    let mut reader = Reader::from_str(contents);
+    reader.config_mut().expand_empty_elements = true;
+    let mut depth = 0usize;
+    let mut seen_root = false;
+    loop {
+        match reader.read_event()? {
+            Event::Start(element) if depth == 0 => {
+                ensure!(
+                    !seen_root && element.name().as_ref() == b"config",
+                    "expected one <config> root"
+                );
+                seen_root = true;
+                depth = 1;
+            }
+            Event::Start(_) => depth += 1,
+            Event::End(_) => depth = depth.checked_sub(1).context("unexpected closing element")?,
+            Event::Text(text) if depth == 0 => {
+                ensure!(
+                    text.as_ref().iter().all(u8::is_ascii_whitespace),
+                    "text outside <config>"
+                );
+            }
+            Event::CData(_) | Event::GeneralRef(_) | Event::DocType(_) if depth == 0 => {
+                anyhow::bail!("unexpected content outside <config>");
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    ensure!(
+        seen_root && depth == 0,
+        "expected a complete <config> document"
+    );
     let xml: XmlConfig = quick_xml::de::from_str(contents)?;
     let text = |value: Option<String>| value.map(|v| v.trim().to_owned()).filter(|v| !v.is_empty());
     Ok(Config {
@@ -125,6 +161,9 @@ mod tests {
             "<config><unknown>true</unknown></config>",
             "<config><disable_locks>maybe</disable_locks></config>",
             "<config><log_level>loud</log_level></config>",
+            "<wrong/>",
+            "<config/><config/>",
+            "<config/>trailing",
             "",
         ] {
             assert!(parse(xml).is_err(), "{xml}");

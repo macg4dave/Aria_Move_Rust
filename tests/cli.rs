@@ -388,6 +388,15 @@ mod unix {
                 .unwrap(),
         );
         assert_eq!(fs::read(fx.completed.join(name)).unwrap(), b"bytes");
+
+        let name = std::ffi::OsString::from_vec(b"single-\xff".to_vec());
+        let source = fx.download.join(&name);
+        fs::write(&source, b"single argument").unwrap();
+        assert_success(&fx.command().arg(&source).output().unwrap());
+        assert_eq!(
+            fs::read(fx.completed.join(name)).unwrap(),
+            b"single argument"
+        );
     }
 
     #[test]
