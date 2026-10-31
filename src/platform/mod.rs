@@ -2,7 +2,7 @@
 //!
 //! Everything here is platform-independent except the small native layer in
 //! `unix.rs` / `windows.rs` (exclusive rename, free space, file identity, link
-//! detection, open flags, directory locks and sync).
+//! detection, open flags, source locks and sync).
 //!
 //! Policy: symlinks and Windows reparse points are refused anywhere along a
 //! path, and publication never replaces an existing destination.
@@ -16,7 +16,7 @@ mod windows;
 #[cfg(windows)]
 use windows as sys;
 
-pub(crate) use sys::{file_identity, free_space, is_link, sync_directory, try_lock_directory};
+pub(crate) use sys::{file_identity, free_space, is_link, sync_directory, try_lock_source};
 
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, Write};
@@ -387,10 +387,10 @@ mod tests {
     #[test]
     fn directory_lock_is_exclusive_until_dropped() {
         let (_temp, root) = root();
-        let held = try_lock_directory(&root).unwrap().expect("uncontended");
-        assert!(try_lock_directory(&root).unwrap().is_none());
+        let held = try_lock_source(&root).unwrap().expect("uncontended");
+        assert!(try_lock_source(&root).unwrap().is_none());
         drop(held);
-        assert!(try_lock_directory(&root).unwrap().is_some());
+        assert!(try_lock_source(&root).unwrap().is_some());
     }
 
     #[cfg(unix)]

@@ -84,7 +84,7 @@ pub struct Config {
     pub preserve_metadata: bool,
     /// On copies, preserve permissions only. Implied by `preserve_metadata`.
     pub preserve_permissions: bool,
-    /// Skip directory locks (for filesystems where `flock` fails).
+    /// Skip per-download locks (for filesystems without lock support).
     pub disable_locks: bool,
 }
 

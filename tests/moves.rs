@@ -125,6 +125,42 @@ fn moves_into_a_missing_completed_base_create_it() {
     assert_eq!(move_entry(&cfg, &file).unwrap(), completed.join("f"));
 }
 
+#[test]
+fn concurrent_directory_downloads_with_the_same_name_are_preserved() {
+    let fx = Fixture::new();
+    let cfg = config(&fx);
+    let sources: Vec<_> = (0..8)
+        .map(|index| {
+            let file = fx.file(&format!("batch{index}/same/file.bin"), &[index]);
+            file.parent().unwrap().to_path_buf()
+        })
+        .collect();
+    let barrier = std::sync::Barrier::new(sources.len());
+    let destinations = std::thread::scope(|scope| {
+        let handles: Vec<_> = sources
+            .iter()
+            .map(|source| {
+                scope.spawn(|| {
+                    barrier.wait();
+                    move_entry(&cfg, source).unwrap()
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    let mut bytes: Vec<_> = destinations
+        .iter()
+        .map(|path| fs::read(path.join("file.bin")).unwrap()[0])
+        .collect();
+    bytes.sort();
+    assert_eq!(bytes, (0..8).collect::<Vec<u8>>());
+    assert_eq!(fx.completed_names().len(), 8);
+    assert!(sources.iter().all(|source| !source.exists()));
+}
+
 #[cfg(unix)]
 mod unix {
     use super::*;
@@ -154,7 +190,7 @@ mod unix {
     }
 
     #[test]
-    fn locks_need_readable_directories_unless_disabled() {
+    fn moves_do_not_need_to_lock_parent_directories() {
         if common::is_root() {
             return;
         }
@@ -169,14 +205,10 @@ mod unix {
             } else {
                 &fx.completed
             };
-            set_mode(unreadable, 0o333); // write+search, no read: cannot be opened to lock
+            set_mode(unreadable, 0o333); // Write+search suffices; no directory lock needed.
             let locked = move_entry(&config(&fx), &src);
-            let mut cfg = config(&fx);
-            cfg.disable_locks = true;
-            let unlocked = move_entry(&cfg, &src);
             set_mode(unreadable, 0o700);
-            assert!(locked.is_err(), "{entry}");
-            let dest = unlocked.unwrap_or_else(|e| panic!("{entry}: {e:#}"));
+            let dest = locked.unwrap_or_else(|e| panic!("{entry}: {e:#}"));
             assert!(dest.exists() && !path.exists());
         }
     }

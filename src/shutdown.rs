@@ -6,7 +6,6 @@
 
 use crate::AriaMoveError;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 static REQUESTED: AtomicBool = AtomicBool::new(false);
 
@@ -27,12 +26,6 @@ pub fn check() -> crate::AMResult<()> {
     } else {
         Ok(())
     }
-}
-
-/// Sleep, then check for cancellation.
-pub(crate) fn pause(duration: Duration) -> crate::AMResult<()> {
-    std::thread::sleep(duration);
-    check()
 }
 
 /// Serializes unit tests that observe or set the global flag, and clears it on

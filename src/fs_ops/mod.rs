@@ -8,6 +8,6 @@ mod resolve;
 mod space;
 mod transfer;
 
-pub use lock::{DirLock, acquire_dir_lock};
+pub use lock::{SourceLock, acquire_source_lock};
 pub use mover::move_entry;
-pub use resolve::resolve_source_path;
+pub use resolve::{resolve_aria2_source, resolve_source_path};

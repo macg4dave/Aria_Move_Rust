@@ -178,7 +178,8 @@ fn failures_exit_nonzero_with_a_reason_and_move_nothing() {
 #[test]
 fn incomplete_downloads_are_refused() {
     let fx = Fixture::new();
-    let partial = fx.file("movie.mkv.part", b"partial");
+    let partial = fx.file("movie.mkv", b"partial");
+    fx.file("movie.mkv.aria2", b"progress");
     assert_failure(&fx.run(&[&partial]), "unfinished download");
     assert!(partial.exists());
 }
@@ -384,9 +385,9 @@ fn concurrent_processes_move_separate_downloads() {
 
 #[cfg(unix)]
 mod unix {
-    use super::common::{self, Fixture, assert_failure, assert_success};
+    use super::common::{Fixture, assert_failure, assert_success};
     use std::fs;
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::os::unix::fs::symlink;
     use std::process::Command;
 
     #[test]
@@ -450,23 +451,17 @@ mod unix {
     }
 
     #[test]
-    fn lock_failures_suggest_and_honour_disable_locks() {
-        if common::is_root() {
-            return;
-        }
+    fn environment_can_explicitly_bypass_a_source_lock() {
         let fx = Fixture::new();
         let file = fx.file("data", b"keep");
-        // Without read permission the directory cannot be opened to lock it.
-        fs::set_permissions(&fx.download, fs::Permissions::from_mode(0o333)).unwrap();
-        let refused = fx.run(&[&file]);
+        let held = aria_move::fs_ops::acquire_source_lock(&file).unwrap();
         let environment = fx
             .command()
             .env("ARIA_MOVE_DISABLE_LOCKS", "1")
             .arg(&file)
             .output()
             .unwrap();
-        fs::set_permissions(&fx.download, fs::Permissions::from_mode(0o700)).unwrap();
-        assert_failure(&refused, "--disable-locks");
+        drop(held);
         assert_success(&environment);
         assert_eq!(fs::read(fx.completed.join("data")).unwrap(), b"keep");
     }
@@ -478,7 +473,7 @@ mod unix {
         use std::time::{Duration, Instant};
         let fx = Fixture::new();
         let source = fx.file("file", b"keep");
-        let held = aria_move::fs_ops::acquire_dir_lock(&fx.download).unwrap();
+        let held = aria_move::fs_ops::acquire_source_lock(&source).unwrap();
         let mut child = fx
             .command()
             .args(["--debug", "--json"])
@@ -491,7 +486,7 @@ mod unix {
         let (sender, receiver) = std::sync::mpsc::channel();
         let reader = std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines() {
-                if line.unwrap().contains("Waiting for directory lock") {
+                if line.unwrap().contains("Waiting for source lock") {
                     let _ = sender.send(());
                 }
             }
@@ -518,5 +513,27 @@ mod unix {
         assert_eq!(status.code(), Some(1), "SIGTERM must be handled, not fatal");
         assert_eq!(fs::read(source).unwrap(), b"keep");
         assert!(fx.completed_names().is_empty());
+    }
+}
+
+#[test]
+fn nested_single_files_and_explicit_overrides_leave_siblings_untouched() {
+    for mode in 0..3 {
+        let fx = Fixture::new();
+        let file = fx.file("category/selected.tmp", b"selected");
+        let sibling = fx.file("category/other.bin", b"keep");
+        let result = match mode {
+            0 => fx.run(&[&file]),
+            1 => fx.run(&[&"GID", &"1", &file]),
+            _ => fx.run(&[&"GID", &"2", &file, &"--source-path", &file]),
+        };
+        assert_success(&result);
+        assert_eq!(
+            fs::read(fx.completed.join("selected.tmp")).unwrap(),
+            b"selected"
+        );
+        assert_eq!(fs::read(sibling).unwrap(), b"keep");
+        assert!(!file.exists());
+        assert!(!fx.completed.join("category").exists());
     }
 }

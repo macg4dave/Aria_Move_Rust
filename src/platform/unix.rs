@@ -45,13 +45,34 @@ pub(crate) fn free_space(path: &Path) -> io::Result<u64> {
 }
 
 pub(crate) fn sync_directory(path: &Path) -> io::Result<()> {
-    super::open_directory(path)?.sync_all()
+    let directory = super::open_directory(path)?;
+    directory_sync_result(path, directory.sync_all())
 }
 
-/// Lock the directory inode itself with a nonblocking `flock`.
-pub(crate) fn try_lock_directory(dir: &Path) -> io::Result<Option<File>> {
+fn directory_sync_result(path: &Path, result: io::Result<()>) -> io::Result<()> {
+    match result {
+        // Some mounted filesystems cannot flush directory handles. File data
+        // is still synced before publication; actual storage errors stay fatal.
+        Err(error) if matches!(error.raw_os_error(), Some(libc::EINVAL | libc::ENOTSUP)) => {
+            tracing::debug!(path = %path.display(), %error, "filesystem does not support directory sync");
+            Ok(())
+        }
+        result => result,
+    }
+}
+
+/// Lock only this download's inode, never its parent or destination directory.
+pub(crate) fn try_lock_source(path: &Path) -> io::Result<Option<File>> {
+    let file = if fs::symlink_metadata(path)?.is_dir() {
+        super::open_directory(path)?
+    } else {
+        super::open_regular_read(path)?
+    };
+    try_lock(file)
+}
+
+fn try_lock(file: File) -> io::Result<Option<File>> {
     use std::os::fd::AsRawFd;
-    let file = super::open_directory(dir)?;
     // SAFETY: `file` owns a valid descriptor for the duration of the call.
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
         return Ok(Some(file));
@@ -160,6 +181,22 @@ fn claim_then_rename(src: &Path, dst: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn directory_sync_tolerates_only_unsupported_operations() {
+        let path = Path::new("share");
+        for code in [libc::EINVAL, libc::ENOTSUP] {
+            assert!(directory_sync_result(path, Err(io::Error::from_raw_os_error(code))).is_ok());
+        }
+        for code in [libc::EIO, libc::ENOSPC, libc::EACCES, libc::EROFS] {
+            assert_eq!(
+                directory_sync_result(path, Err(io::Error::from_raw_os_error(code)))
+                    .unwrap_err()
+                    .raw_os_error(),
+                Some(code)
+            );
+        }
+    }
 
     #[test]
     fn claim_fallback_publishes_files_and_directories_exclusively() {

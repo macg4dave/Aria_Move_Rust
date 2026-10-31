@@ -13,6 +13,13 @@ Uses atomic rename on one filesystem and verified copies across filesystems.
 Refuses symlinks and unfinished downloads.
 The Debian service runs aria2 under the aria-move account and invokes this
 executable directly on completion.
+.SH SOURCE SELECTION
+Explicit source paths and single-file aria2 hooks move only that entry.
+Multi-file aria2 downloads must have their own top-level folder below
+download_base; the hook's first-file path selects that folder.
+Use --source-path with an exact folder for other layouts.
+Completed .tmp, .part and .crdownload files are accepted.
+Aria2 control files still prevent a move.
 .SH OPTIONS
 .TP
 .B --help
@@ -41,7 +48,7 @@ Preserve permissions, timestamps and supported extended attributes when copying.
 Preserve permissions when copying.
 .TP
 .B --disable-locks
-Disable concurrency protection for filesystems that cannot lock directories.
+Disable per-download locks for filesystems without lock support.
 .TP
 .B --json
 Emit structured logs.

@@ -70,27 +70,50 @@ pub(crate) fn sync_directory(_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Hold an exclusive, hidden, delete-on-close sidecar inside the directory.
-pub(crate) fn try_lock_directory(dir: &Path) -> io::Result<Option<File>> {
-    let path = dir.join(".aria_move.dir.lock");
-    super::reject_symlinks(&path)?;
+/// A separate sidecar for each source, automatically removed on close/crash.
+pub(crate) fn try_lock_source(source: &Path) -> io::Result<Option<File>> {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let source = dunce::canonicalize(source)?;
+    let mut hash = DefaultHasher::new();
+    source.file_name().hash(&mut hash);
+    let path =
+        super::parent_dir(&source).join(format!(".aria_move.entry.{:016x}.lock", hash.finish()));
+    try_lock_sidecar(&path)
+}
+
+fn try_lock_sidecar(path: &Path) -> io::Result<Option<File>> {
+    super::reject_symlinks(path)?;
     let file = OpenOptions::new()
         .read(true)
         .write(true)
-        .create(true)
-        .truncate(false)
+        .create_new(true)
         .access_mode(GENERIC_READ | GENERIC_WRITE | DELETE)
         .share_mode(0)
         .custom_flags(
             FILE_ATTRIBUTE_HIDDEN | FILE_FLAG_DELETE_ON_CLOSE | FILE_FLAG_OPEN_REPARSE_POINT,
         )
-        .open(&path);
+        .open(path);
     match file {
         Ok(file) if is_link(&file.metadata()?) => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "lock file is a reparse point",
         )),
         Ok(file) => Ok(Some(file)),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+            // Never mark an existing user file for deletion. A live lock has
+            // sharing disabled; probe it without changing attributes/content.
+            match OpenOptions::new().read(true).open(path) {
+                Err(error) if error.raw_os_error() == Some(ERROR_SHARING_VIOLATION as i32) => {
+                    Ok(None)
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+                Err(error) => Err(error),
+                Ok(_) => Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!("lock path already contains a file: {}", path.display()),
+                )),
+            }
+        }
         Err(e) if e.raw_os_error() == Some(ERROR_SHARING_VIOLATION as i32) => Ok(None),
         Err(e) => Err(e),
     }
@@ -146,11 +169,24 @@ mod tests {
     fn lock_sidecar_is_hidden_and_deleted_on_release() {
         let temp = tempfile::tempdir().unwrap();
         let sidecar = temp.path().join(".aria_move.dir.lock");
-        let lock = try_lock_directory(temp.path()).unwrap().unwrap();
+        let lock = try_lock_sidecar(&sidecar).unwrap().unwrap();
+        assert!(try_lock_sidecar(&sidecar).unwrap().is_none());
         let attributes = fs::metadata(&sidecar).unwrap().file_attributes();
         assert_ne!(attributes & FILE_ATTRIBUTE_HIDDEN, 0);
         drop(lock);
         assert!(!sidecar.exists());
+    }
+
+    #[test]
+    fn an_existing_file_at_the_lock_path_is_never_deleted_or_modified() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("occupied.lock");
+        fs::write(&path, b"user data").unwrap();
+        assert_eq!(
+            try_lock_sidecar(&path).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"user data");
     }
 
     #[test]

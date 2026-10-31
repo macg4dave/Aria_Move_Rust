@@ -11,7 +11,7 @@ pub struct Args {
     /// aria2 GID (informational). Alone, it is taken as the source path.
     pub task_id: Option<OsString>,
 
-    /// Number of files reported by aria2 (informational).
+    /// Number of files reported by aria2; multi-file hooks select the download folder.
     pub num_files: Option<usize>,
 
     /// Source path passed by aria2.
@@ -63,7 +63,7 @@ pub struct Args {
     #[arg(long)]
     pub preserve_permissions: bool,
 
-    /// Disable directory locking (for ZFS/NFS/network shares in containers).
+    /// Disable per-download locking (for filesystems without lock support).
     #[arg(long)]
     pub disable_locks: bool,
 

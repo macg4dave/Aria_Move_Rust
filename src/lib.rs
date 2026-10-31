@@ -25,7 +25,7 @@ pub mod shutdown;
 
 pub use config::{Config, LogLevel};
 pub use errors::AriaMoveError;
-pub use fs_ops::{move_entry, resolve_source_path};
+pub use fs_ops::{move_entry, resolve_aria2_source, resolve_source_path};
 
 /// Library-wide result alias.
 pub type AMResult<T> = anyhow::Result<T>;

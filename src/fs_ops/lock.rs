@@ -1,58 +1,31 @@
-//! Cancellable directory locks. A lock failure is an error, never a silent
+//! Cancellable source locks. A lock failure is an error, never a silent
 //! downgrade; `disable_locks` is the explicit opt-out.
 use crate::{platform, shutdown};
 use anyhow::Result;
 use std::fs::File;
-use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 const RETRY_INTERVAL: Duration = Duration::from_millis(25);
 
-/// An exclusive directory lock, released on drop.
+/// An exclusive lock handle, released on drop.
 #[derive(Debug)]
-pub struct DirLock {
+pub struct SourceLock {
     _handle: File,
 }
 
-/// Wait for an exclusive lock on `dir`, polling so cancellation is honoured.
-pub fn acquire_dir_lock(dir: &Path) -> Result<DirLock> {
-    tracing::debug!(path = %dir.display(), "Waiting for directory lock");
+/// Serialize duplicate calls for one download, without blocking its siblings.
+pub fn acquire_source_lock(src: &Path) -> Result<SourceLock> {
+    tracing::debug!(path = %src.display(), "Waiting for source lock");
     loop {
         shutdown::check()?;
-        match platform::try_lock_directory(dir) {
-            Ok(Some(handle)) => return Ok(DirLock { _handle: handle }),
+        match platform::try_lock_source(src) {
+            Ok(Some(handle)) => return Ok(SourceLock { _handle: handle }),
             Ok(None) => std::thread::sleep(RETRY_INTERVAL),
-            Err(error) => {
-                let denied = error.kind() == io::ErrorKind::PermissionDenied;
-                let error = crate::errors::io_error("lock directory", dir, error);
-                return Err(if denied {
-                    error.context("directory locking failed; on ZFS/NFS or container mounts that reject locks, use --disable-locks")
-                } else {
-                    error
-                });
-            }
+            Err(error) => return Err(crate::errors::source_error(src, error)
+                .context("source locking failed; use --disable-locks only on filesystems without lock support")),
         }
     }
-}
-
-/// Lock the source's parent and the destination directory, in one global
-/// order so concurrent movers cannot deadlock; a shared directory is locked once.
-pub(super) fn acquire_move_locks(
-    src: &Path,
-    dest_dir: &Path,
-    disabled: bool,
-) -> Result<Vec<DirLock>> {
-    if disabled {
-        return Ok(Vec::new());
-    }
-    let mut dirs: Vec<PathBuf> = [platform::parent_dir(src), dest_dir]
-        .into_iter()
-        .map(dunce::canonicalize)
-        .collect::<io::Result<_>>()?;
-    dirs.sort();
-    dirs.dedup();
-    dirs.iter().map(|dir| acquire_dir_lock(dir)).collect()
 }
 
 #[cfg(test)]
@@ -64,9 +37,9 @@ mod tests {
     fn cancellation_interrupts_a_contended_wait() -> Result<()> {
         let _guard = shutdown::test_guard();
         let temp = tempfile::tempdir()?;
-        let held = acquire_dir_lock(temp.path())?;
+        let held = acquire_source_lock(temp.path())?;
         let path = temp.path().to_path_buf();
-        let waiter = std::thread::spawn(move || acquire_dir_lock(&path).map(drop));
+        let waiter = std::thread::spawn(move || acquire_source_lock(&path).map(drop));
         std::thread::sleep(Duration::from_millis(100));
         assert!(!waiter.is_finished(), "must wait while the lock is held");
         shutdown::request();
@@ -83,9 +56,9 @@ mod tests {
     fn a_waiter_proceeds_once_the_holder_releases() -> Result<()> {
         let _guard = shutdown::test_guard();
         let temp = tempfile::tempdir()?;
-        let held = acquire_dir_lock(temp.path())?;
+        let held = acquire_source_lock(temp.path())?;
         let path = temp.path().to_path_buf();
-        let waiter = std::thread::spawn(move || acquire_dir_lock(&path).map(drop));
+        let waiter = std::thread::spawn(move || acquire_source_lock(&path).map(drop));
         std::thread::sleep(Duration::from_millis(100));
         drop(held);
         waiter.join().unwrap()?;
@@ -93,21 +66,19 @@ mod tests {
     }
 
     #[test]
-    fn move_locks_cover_both_directories_once() -> Result<()> {
+    fn source_locks_do_not_lock_siblings_or_parents() -> Result<()> {
         let _guard = shutdown::test_guard();
         let temp = tempfile::tempdir()?;
-        let (incoming, completed) = (temp.path().join("in"), temp.path().join("out"));
-        std::fs::create_dir(&incoming)?;
-        std::fs::create_dir(&completed)?;
-        let locks = acquire_move_locks(&incoming.join("file"), &completed, false)?;
-        assert_eq!(locks.len(), 2);
-        assert!(platform::try_lock_directory(&incoming)?.is_none());
-        assert!(platform::try_lock_directory(&completed)?.is_none());
-        drop(locks);
-        let same = acquire_move_locks(&completed.join("file"), &completed, false)?;
-        assert_eq!(same.len(), 1, "a shared directory must not self-deadlock");
-        drop(same);
-        assert!(acquire_move_locks(&incoming.join("file"), &completed, true)?.is_empty());
+        let first = temp.path().join("first");
+        let second = temp.path().join("second");
+        std::fs::write(&first, b"a")?;
+        std::fs::write(&second, b"b")?;
+        let held = acquire_source_lock(&first)?;
+        assert!(platform::try_lock_source(&first)?.is_none());
+        assert!(platform::try_lock_source(&second)?.is_some());
+        assert!(platform::try_lock_source(temp.path())?.is_some());
+        drop(held);
+        assert!(platform::try_lock_source(&first)?.is_some());
         Ok(())
     }
 }

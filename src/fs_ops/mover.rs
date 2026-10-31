@@ -1,9 +1,8 @@
 //! One lifecycle for files and directory trees:
 //!
 //! 1. validate the source (type, links, disjoint from the destination);
-//! 2. lock the source parent and destination; revalidate under the locks;
-//! 3. take an inventory and wait until it is stable (no in-progress names,
-//!    no size/mtime/identity changes);
+//! 2. lock only this source download; revalidate under the lock;
+//! 3. inventory the source, rejecting aria2 control files;
 //! 4. publish by exclusive rename, or — across filesystems — copy into a
 //!    staging directory, verify every file, publish that by exclusive rename,
 //!    and only then remove the source, entry by entry.
@@ -16,16 +15,9 @@ use super::transfer::{self, Snapshot};
 use super::{lock, metadata, naming, space};
 use crate::{Config, errors, platform, shutdown};
 use anyhow::{Context, Result, bail, ensure};
-use rayon::prelude::*;
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
-
-/// Extensions that mark a download that is still in progress.
-const INCOMPLETE_EXTENSIONS: [&str; 4] = ["part", "aria2", "tmp", "crdownload"];
-const STABILITY_INTERVAL: Duration = Duration::from_millis(50);
-const STABILITY_ATTEMPTS: usize = 3;
 
 /// One file or directory of the source. The root has an empty relative path.
 #[derive(Debug, PartialEq, Eq)]
@@ -56,18 +48,30 @@ fn move_with(config: &Config, src: &Path, force_copy: bool) -> Result<PathBuf> {
     }
     platform::create_directory(&config.completed_base)
         .map_err(|e| errors::io_error("create completed_base", &config.completed_base, e))?;
-    let _locks = lock::acquire_move_locks(src, &config.completed_base, config.disable_locks)?;
+    let _lock = (!config.disable_locks)
+        .then(|| lock::acquire_source_lock(src))
+        .transpose()?;
     validate_source(config, src)?;
-    let entries = stable_inventory(src, || shutdown::pause(STABILITY_INTERVAL))?;
-    let dest = naming::unique_destination(&candidate)
+    let entries = inventory(src)?;
+    let mut dest = naming::unique_destination(&candidate)
         .map_err(|e| errors::io_error("select destination", &candidate, e))?;
-    if !force_copy && rename(src, &dest)? {
-        tracing::debug!(dest = %dest.display(), "moved by rename");
-        return Ok(dest);
+    if !force_copy {
+        loop {
+            match rename(src, &dest) {
+                Ok(true) => {
+                    tracing::debug!(dest = %dest.display(), "moved by rename");
+                    return Ok(dest);
+                }
+                Ok(false) => break,
+                Err(error) if is_collision(&error) => {
+                    dest = naming::unique_destination(&candidate)?
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
     tracing::debug!(dest = %dest.display(), "different filesystem; copying");
-    copy_then_remove(config, src, &dest, &entries)?;
-    Ok(dest)
+    copy_then_remove(config, src, &dest, &entries)
 }
 
 fn validate_source(config: &Config, src: &Path) -> Result<()> {
@@ -117,16 +121,6 @@ fn at(root: &Path, relative: &Path) -> PathBuf {
     }
 }
 
-fn is_incomplete(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| {
-            INCOMPLETE_EXTENSIONS
-                .iter()
-                .any(|i| ext.eq_ignore_ascii_case(i))
-        })
-}
-
 /// Every entry under `root` (root first, parents before children), rejecting
 /// links, special files and in-progress names.
 fn inventory(root: &Path) -> Result<Vec<Entry>> {
@@ -154,7 +148,11 @@ fn inventory(root: &Path) -> Result<Vec<Entry>> {
                 path.display()
             );
         }
-        if !directory && is_incomplete(path) {
+        if !directory
+            && path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("aria2"))
+        {
             bail!("'{}' looks like an unfinished download", path.display());
         }
         let handle = open_entry(path, directory)?;
@@ -191,24 +189,6 @@ fn remove_entry(source: &Path, entry: &Entry) -> Result<()> {
     .map_err(|e| errors::io_error("remove source", source, e))
 }
 
-/// An inventory that did not change across a pause; downloads still being
-/// written are refused rather than moved.
-fn stable_inventory(root: &Path, mut pause: impl FnMut() -> Result<()>) -> Result<Vec<Entry>> {
-    let mut last = inventory(root)?;
-    for _ in 0..STABILITY_ATTEMPTS {
-        pause()?;
-        let current = inventory(root)?;
-        if current == last {
-            return Ok(current);
-        }
-        last = current;
-    }
-    bail!(
-        "'{}' is still changing; retry once it is complete",
-        root.display()
-    )
-}
-
 /// Exclusive rename. `Ok(false)` means the destination is on another filesystem.
 fn rename(src: &Path, dest: &Path) -> Result<bool> {
     shutdown::check()?;
@@ -227,7 +207,18 @@ fn rename(src: &Path, dest: &Path) -> Result<bool> {
     }
 }
 
-fn copy_then_remove(config: &Config, src: &Path, dest: &Path, entries: &[Entry]) -> Result<()> {
+fn is_collision(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<io::Error>()
+        .is_some_and(|e| e.kind() == io::ErrorKind::AlreadyExists)
+}
+
+fn copy_then_remove(
+    config: &Config,
+    src: &Path,
+    dest: &Path,
+    entries: &[Entry],
+) -> Result<PathBuf> {
     let required = entries
         .iter()
         .try_fold(0u64, |sum, e| sum.checked_add(e.snapshot.len))
@@ -263,7 +254,7 @@ fn copy_then_remove(config: &Config, src: &Path, dest: &Path, entries: &[Entry])
         fs::create_dir(&target).map_err(|e| errors::io_error("create directory", &target, e))?;
     }
     entries
-        .par_iter()
+        .iter()
         .filter(|entry| !entry.directory)
         .try_for_each(|entry| -> Result<()> {
             shutdown::check()?;
@@ -297,7 +288,18 @@ fn copy_then_remove(config: &Config, src: &Path, dest: &Path, entries: &[Entry])
     }
 
     shutdown::check()?;
-    platform::rename_noreplace(&staged, dest).map_err(|e| errors::io_error("publish", dest, e))?;
+    let candidate = dest.to_path_buf();
+    let mut dest = candidate.clone();
+    loop {
+        shutdown::check()?;
+        match platform::rename_noreplace(&staged, &dest) {
+            Ok(()) => break,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                dest = naming::unique_destination(&candidate)?;
+            }
+            Err(error) => return Err(errors::io_error("publish", &dest, error)),
+        }
+    }
     if entries[0].directory {
         // The staging directory was the published tree; its guard must not act.
         let _published = stage.keep();
@@ -332,7 +334,7 @@ fn copy_then_remove(config: &Config, src: &Path, dest: &Path, entries: &[Entry])
         })?;
     }
     platform::sync_directory(platform::parent_dir(src))?;
-    Ok(())
+    Ok(dest)
 }
 
 #[cfg(test)]
@@ -381,6 +383,55 @@ mod tests {
     }
 
     /// Every behaviour below must hold for both strategies.
+    #[test]
+    fn a_destination_claimed_during_copy_is_retried_without_overwriting() -> Result<()> {
+        let _guard = shutdown::test_guard();
+        let fx = Fixture::new();
+        let source = fx.write("same.bin", b"new payload");
+        let candidate = fx.config.completed_base.join("same.bin");
+        fs::write(&candidate, b"another completed download")?;
+        let entries = inventory(&source)?;
+        let actual = copy_then_remove(&fx.config, &source, &candidate, &entries)?;
+        assert_ne!(actual, candidate);
+        assert_eq!(fs::read(candidate)?, b"another completed download");
+        assert_eq!(fs::read(actual)?, b"new payload");
+        assert!(!source.exists());
+        assert_eq!(fx.completed_names().len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_calls_for_one_source_publish_only_once() -> Result<()> {
+        let _guard = shutdown::test_guard();
+        for force_copy in [false, true] {
+            let fx = Fixture::new();
+            let source = fx.write("same.bin", b"payload");
+            let barrier = std::sync::Barrier::new(2);
+            let results = std::thread::scope(|scope| {
+                let handles: Vec<_> = (0..2)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            barrier.wait();
+                            move_with(&fx.config, &source, force_copy)
+                        })
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|h| h.join().unwrap())
+                    .collect::<Vec<_>>()
+            });
+            assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+            assert_eq!(fx.completed_names(), ["same.bin"]);
+            assert_eq!(
+                fs::read(fx.config.completed_base.join("same.bin"))?,
+                b"payload"
+            );
+            assert!(!source.exists());
+        }
+        Ok(())
+    }
+
     const STRATEGIES: [bool; 2] = [false, true];
 
     #[test]
@@ -500,15 +551,30 @@ mod tests {
         let _guard = shutdown::test_guard();
         for force_copy in STRATEGIES {
             let fx = Fixture::new();
-            for name in ["single.part", "tree/done.bin", "tree/next.ARIA2"] {
+            for name in ["single.aria2", "tree/done.bin", "tree/next.ARIA2"] {
                 fx.write(name, b"partial");
             }
-            for name in ["single.part", "tree"] {
+            for name in ["single.aria2", "tree"] {
                 let error = move_with(&fx.config, &fx.incoming(name), force_copy).unwrap_err();
                 assert!(error.to_string().contains("unfinished download"), "{error}");
             }
             assert!(fx.incoming("tree/done.bin").exists());
             assert!(fx.completed_names().is_empty());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn completed_files_with_temporary_looking_extensions_are_valid() -> Result<()> {
+        let _guard = shutdown::test_guard();
+        for force_copy in STRATEGIES {
+            let fx = Fixture::new();
+            for name in ["data.tmp", "model.part", "archive.crdownload"] {
+                let source = fx.write(name, b"complete");
+                let destination = move_with(&fx.config, &source, force_copy)?;
+                assert_eq!(fs::read(destination)?, b"complete");
+                assert!(!source.exists());
+            }
         }
         Ok(())
     }
@@ -564,31 +630,6 @@ mod tests {
             error.to_string().contains("completed_base is not set"),
             "{error}"
         );
-        Ok(())
-    }
-
-    #[test]
-    fn stability_waits_for_changes_to_stop() -> Result<()> {
-        let _guard = shutdown::test_guard();
-        let fx = Fixture::new();
-        let file = fx.write("growing", b"1");
-        let mut writes = 0;
-        stable_inventory(&file, || {
-            writes += 1;
-            if writes == 1 {
-                fs::write(&file, b"12")?;
-            }
-            Ok(())
-        })?;
-        assert_eq!(writes, 2, "one changed sample, then one stable sample");
-        let mut size = 0;
-        let error = stable_inventory(&file, || {
-            size += 1;
-            fs::write(&file, vec![0; size])?;
-            Ok(())
-        })
-        .unwrap_err();
-        assert!(error.to_string().contains("still changing"), "{error}");
         Ok(())
     }
 

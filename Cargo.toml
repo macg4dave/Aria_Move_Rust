@@ -19,7 +19,6 @@ tracing-subscriber = { version = "0.3", features = [
 ] }
 tracing-appender = "0.2"
 walkdir = "2.3"
-rayon = "1.7"
 tempfile = "3"
 serde = { version = "1.0", features = ["derive"] }
 quick-xml = { version = "0.41", features = ["serialize"] }

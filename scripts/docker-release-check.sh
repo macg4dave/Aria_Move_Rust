@@ -77,8 +77,9 @@ for arch in "${arches[@]}"; do
     ready
     docker exec -e "ARIA_MOVE_TEST_URL=$url" "$guest" bash /package-tests/lifecycle.sh after-reboot >> "$out/$arch-lifecycle.log" 2>&1
     docker exec "$guest" dpkg --audit >> "$out/$arch-lifecycle.log"
-    printf '%s\n' "PASS $package" > "$out/$arch-PASS"
     cleanup
     guest=
+    bash "$repo/scripts/docker-concurrency-check.sh" "$arch" "$out/$package" > "$out/$arch-concurrency-runner.log" 2>&1
+    printf '%s\n' "PASS $package" > "$out/$arch-PASS"
 done
 echo "Verified packages, checksums and logs: $out"

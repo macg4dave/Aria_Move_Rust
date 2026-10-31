@@ -50,7 +50,51 @@ It creates only a uniquely owned temporary subtree. Without the configured mount
 it reports a skip. Ordinary validation does not require ZFS or administrator access.
 macOS retains its native implementation; this pass adds no macOS test requirements.
 
+## Move logic regression coverage
+
+The October 2026 logic review added checks that single-file hooks and explicit
+nested paths leave sibling downloads untouched, while multi-file hooks still
+move their download folder. Both rename and copy paths accept completed .tmp,
+.part and .crdownload files and refuse aria2 control files. Windows tests verify
+that a pre-existing file at a lock path is neither changed nor deleted. Unix
+tests distinguish unsupported directory sync from real storage/access errors.
+
+Each hook streams files sequentially; independent hooks remain concurrent. The
+Rayon pool and timed stability sampling were removed. Copy verification, source
+change detection, exclusive publication and checked source deletion remain.
+Actual SMB/NFS mounts are not exercised by the default Docker tests; use a
+configured share before claiming compatibility with a particular server/mount.
+
+Verified after these fixes on 31 October 2026: Windows all-feature tests and
+Clippy passed; Docker amd64 and ARM64 all-feature tests, Clippy, Lintian and the
+complete package lifecycle passed. The real-hook concurrency check also passed
+on both architectures: ten small moves finished while the 2 GiB copy was paused,
+and every SHA-256 matched. Logs: target/logic-review-windows-tests.log and
+target/release-check/. These fixes are local changes after published v1.5.0.
+
 ## Debian package lifecycle
+
+The release gate also runs a heavy concurrency check using a real 2 GiB
+download and ten 1 MiB downloads, invoked through aria2's actual completion
+hooks. The completed directory is a separate 3 GiB tmpfs, forcing verified
+copies. The large hook is paused after a partial staging copy is observed;
+all ten small moves must finish before it resumes. Every output is SHA-256
+verified and sources/staging must be removed. This requires at least 3 GiB
+free RAM in Docker plus about 2 GiB of container disk space. To run only that
+check against an already-built package:
+
+```sh
+bash scripts/docker-concurrency-check.sh amd64
+bash scripts/docker-concurrency-check.sh arm64
+```
+
+Verified on 31 October 2026 with real aria2 completion hooks on Docker amd64
+and ARM64 under QEMU: all ten small files completed before the paused large
+copy resumed; all eleven output hashes matched, with no sources or staging
+left behind. Native Linux and Windows Rust tests also cover source-specific
+lock independence, duplicate calls, cancellation and concurrent file/directory
+name collisions. The concurrency fix is a working-tree change after the
+published v1.5.0 release; that release's binaries retain the earlier locking.
 
 The release gate is `bash scripts/docker-release-check.sh` (Linux or Git Bash).
 It builds and tests the exact amd64/arm64 `.deb` files and retains logs, checksums

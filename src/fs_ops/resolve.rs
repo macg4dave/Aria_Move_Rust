@@ -11,8 +11,8 @@ use std::path::{Component, Path, PathBuf};
 /// 2. if not found, a path wrapped in literal quotes (as some shells and
 ///    wrappers pass it) is retried without them — an existing literal name
 ///    always wins;
-/// 3. a file nested inside a download folder (aria2 passes the first file of a
-///    multi-file download) is promoted to that top-level folder.
+///
+/// Explicit file paths stay files, including paths nested below download_base.
 pub fn resolve_source_path(config: &Config, path: Option<&Path>) -> Result<PathBuf> {
     let path = path.ok_or_else(|| AriaMoveError::NoneFound(config.download_base.clone()))?;
     let selected = match locate(config, path) {
@@ -22,7 +22,7 @@ pub fn resolve_source_path(config: &Config, path: Option<&Path>) -> Result<PathB
         },
         result => result?,
     };
-    Ok(promote_to_download_root(config, selected))
+    Ok(selected)
 }
 
 fn locate(config: &Config, path: &Path) -> Result<PathBuf> {
@@ -85,23 +85,22 @@ fn decode_legacy_quotes(path: &Path) -> Option<PathBuf> {
     })
 }
 
-fn promote_to_download_root(config: &Config, selected: PathBuf) -> PathBuf {
-    if !selected.is_file() {
-        return selected;
+/// Resolve aria2's first-file argument for a multi-file download. Such downloads
+/// must have their own top-level folder under download_base.
+pub fn resolve_aria2_source(config: &Config, path: &Path, num_files: usize) -> Result<PathBuf> {
+    let selected = resolve_source_path(config, Some(path))?;
+    if num_files <= 1 || !selected.is_file() {
+        return Ok(selected);
     }
-    let (Ok(absolute), Ok(base)) = (
-        dunce::canonicalize(&selected),
-        dunce::canonicalize(&config.download_base),
-    ) else {
-        return selected;
-    };
-    match absolute.strip_prefix(&base).map(Path::components) {
-        Ok(mut relative) if relative.clone().count() > 1 => match relative.next() {
-            Some(first) => base.join(first),
-            None => selected,
-        },
-        _ => selected,
+    let absolute = dunce::canonicalize(&selected)?;
+    let base = dunce::canonicalize(&config.download_base)?;
+    let relative = absolute.strip_prefix(&base).ok();
+    if let Some(relative) = relative.filter(|p| p.components().count() > 1) {
+        return Ok(base.join(relative.components().next().unwrap()));
     }
+    bail!(
+        "Multi-file download must have its own folder under download_base; pass --source-path with the exact folder to move"
+    )
 }
 
 #[cfg(test)]
@@ -156,7 +155,7 @@ mod tests {
     }
 
     #[test]
-    fn nested_files_are_promoted_to_their_download_folder() {
+    fn only_multi_file_hooks_promote_nested_files() {
         let (_temp, cfg) = fixture();
         let base = &cfg.download_base;
         fs::create_dir_all(base.join("album").join("disc 2")).unwrap();
@@ -164,10 +163,13 @@ mod tests {
         fs::write(base.join("single.bin"), b"x").unwrap();
         let nested = base.join("album").join("disc 2").join("track.flac");
         assert_eq!(
-            resolve_source_path(&cfg, Some(&nested)).unwrap(),
+            resolve_aria2_source(&cfg, &nested, 2).unwrap(),
             base.join("album")
         );
+        assert_eq!(resolve_source_path(&cfg, Some(&nested)).unwrap(), nested);
+        assert_eq!(resolve_aria2_source(&cfg, &nested, 1).unwrap(), nested);
         let top = base.join("single.bin");
+        assert!(resolve_aria2_source(&cfg, &top, 2).is_err());
         assert_eq!(resolve_source_path(&cfg, Some(&top)).unwrap(), top);
         let directory = base.join("album").join("disc 2");
         assert_eq!(

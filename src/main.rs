@@ -82,7 +82,10 @@ fn run(args: Args) -> Result<()> {
 fn execute(args: &Args, cfg: &mut config::Config) -> Result<()> {
     shutdown::check()?;
     config::validate_and_normalize(cfg)?;
-    let src = aria_move::resolve_source_path(cfg, args.resolved_source())?;
+    let src = match (&args.source_path, &args.source_path_pos, args.num_files) {
+        (None, Some(path), Some(count)) => aria_move::resolve_aria2_source(cfg, path, count)?,
+        _ => aria_move::resolve_source_path(cfg, args.resolved_source())?,
+    };
     let dest = aria_move::move_entry(cfg, &src)?;
     if cfg.dry_run && !args.json {
         output::print_info(&format!(

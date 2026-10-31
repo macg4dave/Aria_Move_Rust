@@ -18,6 +18,10 @@ a disposable systemd Docker container. It checks clean installation, local HTTP
 and real DNS/HTTPS downloads, completion hooks, crash/config recovery, restart,
 upgrade with modified config, container restart/startup, existing aria2 integration
 with the bundled service disabled, remove/reinstall and purge/reinstall.
+It also runs the 2 GiB + ten 1 MiB concurrent-hook test on a separate completed
+filesystem. All small moves must finish while the large copy is paused. Allow
+at least 3 GiB free Docker RAM and about 2 GiB container disk for this check;
+see [VALIDATION.md](VALIDATION.md) to run it separately.
 
 Systemd containers require privileged execution and a Linux Docker engine with
 writable private cgroups. The runner mounts test code read-only, copies the

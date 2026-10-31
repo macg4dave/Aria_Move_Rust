@@ -79,3 +79,10 @@ cargo test --workspace --doc --all-features
 ```
 
 See [packaging](docs/RELEASING.md), [validation](docs/VALIDATION.md), [installer review](docs/INSTALLER_REVIEW.md) and [architecture](docs/ARCHITECTURE.md). [MIT license](LICENSE).
+
+For single-file hooks and explicit source paths, only the selected entry moves,
+even inside a category folder. Multi-file aria2 downloads must have their own
+top-level folder under `download_base`; their hook passes only the first file,
+so the mover selects that download folder. Use `--source-path` with the exact
+folder for another layout. Completed `.tmp`, `.part` and `.crdownload` files are
+accepted; aria2 control files still block a move.
