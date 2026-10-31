@@ -1,88 +1,476 @@
-# aria_move 1.5
+# Aria Move
 
-Move completed aria2 downloads safely from an incoming directory to a completed directory. Uses atomic renames where possible and verified copies across filesystems. Existing files are preserved; unfinished downloads and symlinks are refused.
+Aria Move is a small companion for [aria2](https://aria2.github.io/), the download manager. Once aria2 finishes a download, it tells Aria Move to move it into your **completed** folder. You can run both together on a Debian or Ubuntu home server, or connect Aria Move to an aria2 installation you already have.
 
-Supported targets: Linux x86_64 (amd64), Linux ARM64 (arm64), Windows x86_64.
+
+
+**Quick links:** [Install](#install-on-debian-or-ubuntu) · [Connect a web UI](#connect-a-web-interface) · [Change folders](#use-your-own-download-folders) · [Windows](#windows) · [Fix a problem](#troubleshooting)
+
+## What makes it useful?
+
+- **Automatic:** finished downloads move without you sorting them by hand.
+- **Careful with your files:** existing destination files are preserved, and Aria Move refuses unfinished downloads and symbolic links.
+- **Works across drives:** it uses a fast rename when possible, or a verified copy when moving between filesystems.
+- **Home-server friendly:** the Debian package installs aria2 and sets up a systemd service, including a restricted account.
+- **Test before moving:** a dry-run option shows what would happen without touching the files.
+
+**Supported builds:** Linux x86-64 (`amd64`), Linux ARM64 (`arm64`) and Windows x86-64.
 
 ## Install on Debian or Ubuntu
 
-Download your architecture's package from [Releases](https://github.com/macg4dave/Aria_Move_Rust/releases), then:
+**Recommended for a home server, mini PC or Raspberry Pi running 64-bit Debian/Ubuntu.** You do not need Rust, a compiler or custom startup scripts.
+
+### 1. Download the package
+
+Open the [Releases page](https://github.com/macg4dave/Aria_Move_Rust/releases) and download the `.deb` file for your machine:
+
+| Your machine                                                   | Package ending |
+| -------------------------------------------------------------- | -------------- |
+| Typical Intel/AMD PC or server                                 | `_amd64.deb`   |
+| 64-bit ARM machine, such as a Raspberry Pi running ARM64 Linux | `_arm64.deb`   |
+
+Not sure which one you need? Run:
 
 ```bash
+dpkg --print-architecture
+```
+
+If it prints `amd64`, choose the amd64 package. If it prints `arm64`, choose the arm64 package. If it prints something else, neither of these packages is the right fit.
+
+### 2. Install it
+
+Open a terminal in the folder containing the downloaded `.deb` file. For example:
+
+```bash
+cd ~/Downloads
 sudo apt install ./aria-move_1.5.0_amd64.deb
+```
+
+The package installs aria2 as needed, creates its own service account and configures the automatic completion hook. You do **not** need to write a service file or a shell script.
+
+> **Already running your own aria2 server?** Read [Use an existing aria2 installation](#use-an-existing-aria2-installation) before starting another one. Two instances should not share the same download folder and session.
+
+### 3. Check that it started
+
+```bash
 systemctl status aria-move
 ```
 
-The package installs aria2, creates a restricted service account and enables a managed aria2 service. No wrapper scripts or hand-written units are needed.
+Look for **`active (running)`**. Press **Q** to leave the status screen.
 
-- Incoming: `/var/lib/aria-move/incoming`
-- Completed: `/var/lib/aria-move/completed`
-- Configuration: `/etc/aria_move/config.xml` and `/etc/aria_move/aria2.conf`
-- Move logs: `/var/log/aria-move/aria_move.log`
-
-The service accepts authenticated RPC connections on localhost port 6800. Point your aria2 client at `http://localhost:6800/jsonrpc`; retrieve its automatically generated token with `sudo cat /var/lib/aria-move/rpc-secret`. Keep that token private. See [installation details](docs/INSTALLATION.md) for a command-line download example, custom storage and existing aria2 installations.
-
-## First-run configuration and usage
-
-Debian defaults need no path setup. Check configuration with `aria_move --check-config`.
-
-Standalone users can create configuration without editing XML:
+Check the mover configuration:
 
 ```bash
-aria_move --init --download-base /absolute/incoming --completed-base /absolute/completed
-aria_move --dry-run /absolute/incoming/movie.mkv
-aria_move /absolute/incoming/movie.mkv
+sudo -u aria-move aria_move --check-config
 ```
 
-On Windows extract the archive to a permanent folder and run `aria_move.exe` there with Windows paths, such as `C:\Downloads\incoming`. Administrator rights are unnecessary. Set aria2's completion hook directly to the executable. It runs once per completion; it is not a Windows service.
+That's the basic installation done. On the standard package setup, files go here:
 
-`--init` never overwrites configuration. Standalone defaults are `~/.config/aria_move/config.xml` on Linux and `%APPDATA%\aria_move\config.xml` on Windows. An installed system config takes precedence on Linux. `--config PATH` overrides `ARIA_MOVE_CONFIG` and defaults. `--print-config` shows the selected path; `--help` lists all options.
+| Purpose               | Location                           |
+| --------------------- | ---------------------------------- |
+| Downloads in progress | `/var/lib/aria-move/incoming`      |
+| Finished downloads    | `/var/lib/aria-move/completed`     |
+| Aria Move settings    | `/etc/aria_move/config.xml`        |
+| aria2 settings        | `/etc/aria_move/aria2.conf`        |
+| Move activity log     | `/var/log/aria-move/aria_move.log` |
 
-## Service management
+**Tip:** You can leave these defaults in place to get started and change the storage location later.
+
+## Connect a web interface
+
+A web interface makes it easier to add downloads from your browser. Aria Move does **not** include one, but the bundled aria2 service provides an RPC connection that compatible aria2 clients and web interfaces can use.
+
+The default connection settings are:
+
+| Setting            | Value                            |
+| ------------------ | -------------------------------- |
+| Server / host      | `localhost` (on the same server) |
+| Port               | `6800`                           |
+| Protocol           | `http`                           |
+| RPC path           | `/jsonrpc`                       |
+| Full local address | `http://localhost:6800/jsonrpc`  |
+| Authentication     | Secret token                     |
+
+### Get your secret token
+
+On the Debian/Ubuntu server, run:
+
+```bash
+sudo cat /var/lib/aria-move/rpc-secret
+```
+
+Copy the value into your web interface's **RPC secret**, **token** or similarly named field. The token is generated automatically and persists across normal restarts and reinstalls.
+
+**Important:** Keep this token private. It gives access to the aria2 download manager.
+
+### Connecting from another computer
+
+The bundled service listens only on the server itself by default. This is intentional: `localhost` on your laptop is **not** the same as `localhost` on your server.
+
+For secure remote access, use SSH port forwarding from your other computer:
+
+```bash
+ssh -L 6800:127.0.0.1:6800 your-user@your-server
+```
+
+Replace `your-user` and `your-server` with your SSH login and the server's hostname or IP address. Leave that SSH connection open, then set your browser-based aria2 client to `http://localhost:6800/jsonrpc` and enter the secret token.
+
+**Tip:** If your own computer already uses port 6800, forward another local port, for example `ssh -L 16800:127.0.0.1:6800 your-user@your-server`, and connect the client to `http://localhost:16800/jsonrpc` instead.
+
+Do not expose the RPC port directly to the internet.
+
+## Try a download
+
+With your preferred aria2 client connected, add a download. aria2 saves it in `incoming` while it is downloading. When it finishes, the completion hook calls Aria Move, which moves the finished file into `completed`.
+
+To look at the folders on your server:
+
+```bash
+sudo ls -lah /var/lib/aria-move/incoming
+sudo ls -lah /var/lib/aria-move/completed
+```
+
+To see recent moves:
+
+```bash
+sudo tail -n 30 /var/log/aria-move/aria_move.log
+```
+
+To watch the log as new downloads finish, use:
+
+```bash
+sudo tail -f /var/log/aria-move/aria_move.log
+```
+
+Press **Ctrl+C** to stop following the log.
+
+## Use your own download folders
+
+Want downloads on a larger disk, NAS mount or `/srv/downloads`? Both programs need to agree on the incoming folder. The service account also needs access to it.
+
+For example, suppose you want:
+
+```text
+/srv/downloads/
+├── incoming/
+└── completed/
+```
+
+### 1. Stop the service
 
 ```bash
 sudo systemctl stop aria-move
-sudo systemctl start aria-move
-sudo systemctl restart aria-move
-systemctl status aria-move
-journalctl -u aria-move -e
 ```
 
-Install a newer package with `sudo apt install ./aria-move_VERSION_ARCH.deb`. Local configuration survives upgrades.
+### 2. Create the folders
+
+```bash
+sudo mkdir -p /srv/downloads/incoming /srv/downloads/completed
+```
+
+If these folders belong only to Aria Move, give its service account ownership:
+
+```bash
+sudo chown aria-move:aria-move /srv/downloads/incoming /srv/downloads/completed
+```
+
+**Tip:** On a shared disk or NAS, **do not blindly change ownership of the whole drive**. Give the `aria-move` account access to only the directories it needs. Network mounts may need their own permission configuration.
+
+### 3. Tell aria2 where to download
+
+```bash
+sudo nano /etc/aria_move/aria2.conf
+```
+
+Set the `dir` entry to:
+
+```ini
+dir=/srv/downloads/incoming
+```
+
+press **Ctrl+O**, **Enter**, then **Ctrl+X** to save and exit.
+
+### 4. Tell Aria Move where to move files
+
+```bash
+sudo nano /etc/aria_move/config.xml
+```
+
+Change the incoming and completed entries. For example:
+
+```xml
+<config>
+  <download_base>/srv/downloads/incoming</download_base>
+  <completed_base>/srv/downloads/completed</completed_base>
+  <log_file>/var/log/aria-move/aria_move.log</log_file>
+  <log_level>normal</log_level>
+</config>
+```
+
+You can keep other valid settings that were already in the file. Use **absolute paths**, not relative paths. Keep the incoming and completed folders separate; don't put one inside the other.
+
+### 5. Allow the service to use those folders
+
+The bundled service has filesystem protections, so changing permissions alone is not enough. Create a systemd override:
+
+```bash
+sudo systemctl edit aria-move
+```
+
+Paste:
+
+```ini
+[Unit]
+RequiresMountsFor=/srv/downloads/incoming /srv/downloads/completed
+
+[Service]
+ReadWritePaths=/srv/downloads/incoming /srv/downloads/completed
+```
+
+Save and exit the editor. `RequiresMountsFor` helps with mounted drives; `ReadWritePaths` lets the protected service write to the new locations. These settings do not grant ordinary Linux file permissions, which must also be correct.
+
+### 6. Check and restart
+
+```bash
+sudo systemctl daemon-reload
+sudo -u aria-move aria_move --check-config
+sudo systemctl start aria-move
+systemctl status aria-move
+```
+
+Try a small download and confirm it appears in your new completed folder.
+
+## Everyday commands
+
+All the following commands apply to the bundled Debian/Ubuntu service.
+
+| What you want                   | Command                                      |
+| ------------------------------- | -------------------------------------------- |
+| Check whether it is running     | `systemctl status aria-move`                 |
+| Restart after changing settings | `sudo systemctl restart aria-move`           |
+| View recent service messages    | `journalctl -u aria-move -e`                 |
+| Watch service messages live     | `journalctl -u aria-move -f`                 |
+| Check mover settings            | `sudo -u aria-move aria_move --check-config` |
+| Show available options          | `aria_move --help`                           |
+
+**Tip:** If you changed `aria2.conf` or `config.xml`, restart the service to apply the changes.
+
+## Test a move without changing files
+
+You can run Aria Move yourself, without waiting for aria2. Use `--dry-run` to preview a move:
+
+```bash
+aria_move --dry-run /path/to/incoming/example.zip
+```
+
+Then, if the result is correct:
+
+```bash
+aria_move /path/to/incoming/example.zip
+```
+
+The example path must refer to an existing item **inside your configured incoming folder**. The user running the command must have permission to access the files and destination.
+
+When running outside the packaged environment, you can supply both folders explicitly:
+
+```bash
+aria_move \
+  --download-base /path/to/incoming \
+  --completed-base /path/to/completed \
+  --dry-run /path/to/incoming/example.zip
+```
+
+**How folders behave:** For a normal one-file download, Aria Move moves the selected file. For a multi-file aria2 download, place that download in its own top-level folder inside `incoming`; when aria2 supplies its multi-file completion information, Aria Move can move that folder together. It does not simply move every other file in the incoming folder.
+
+## Use an existing aria2 installation
+
+Already have aria2 configured with your own web UI, RPC password, or download directories? You can use Aria Move without running the bundled aria2 service.
+
+On Debian/Ubuntu, install the `.deb` as above, then disable the bundled service so it doesn't compete with your existing installation:
+
+```bash
+sudo systemctl disable --now aria-move
+```
+
+Find the configuration file used by your existing aria2 instance and add or update this line:
+
+```ini
+on-download-complete=/usr/bin/aria_move
+```
+
+Next, edit Aria Move's configuration:
+
+```bash
+sudo nano /etc/aria_move/config.xml
+```
+
+Make `download_base` match your existing aria2 download directory, and set `completed_base` to your intended finished-download folder. If you enable file logging, choose a log file location that the **existing aria2 service's account** can write to.
+
+Check the configuration and restart **your existing aria2 service**, not the bundled `aria-move` one.
+
+**Important:** Only one aria2 instance should manage a given incoming folder/session. Aria Move runs when the completion hook is called; it does not need its own continuously running mover daemon.
+
+## Windows
+
+Windows users can run the Aria Move executable alongside an existing aria2 installation. The Windows package does **not** install a Windows service or a download manager.
+
+1. Download the Windows x86-64 archive from [Releases](https://github.com/macg4dave/Aria_Move_Rust/releases).
+2. Extract it into a permanent folder, for example `C:\Tools\AriaMove`.
+3. Open PowerShell and navigate to that folder.
+4. Create configuration using the example below.
+
+```powershell
+cd C:\Tools\AriaMove
+.\aria_move.exe --init --download-base "C:\Downloads\incoming" --completed-base "C:\Downloads\completed"
+```
+
+Create the corresponding folders if they do not exist. `--init` creates the config but will not overwrite an existing one. To see which config is being used:
+
+```powershell
+.\aria_move.exe --print-config
+```
+
+Check it:
+
+```powershell
+.\aria_move.exe --check-config
+```
+
+Preview moving a finished file:
+
+```powershell
+.\aria_move.exe --dry-run "C:\Downloads\incoming\example.zip"
+```
+
+In your existing aria2 configuration, point the completion hook at the executable using its **actual full path**:
+
+```ini
+on-download-complete=C:\Tools\AriaMove\aria_move.exe
+```
+
+Restart aria2 after changing its configuration. aria2 invokes Aria Move once per completed download. No administrator rights are normally required to run the mover under your user account.
+
+**Windows configuration:** The default user config is at `%APPDATA%\aria_move\config.xml`. If a file already exists, `--init` will refuse to replace it. Edit the existing config or use `--config` to select another config file.
+
+## Other Linux installations / build from source
+
+If there isn't a package for your operating system, advanced users can build the executable from source. You need Rust 1.99 or later and a working native C linker.
+
+```bash
+git clone https://github.com/macg4dave/Aria_Move_Rust.git
+cd Aria_Move_Rust
+cargo build --release --locked
+```
+
+The compiled Linux executable is in `target/release/aria_move`. Set up a standalone configuration with your own absolute folder paths:
+
+```bash
+./target/release/aria_move --init \
+  --download-base /home/your-user/Downloads/incoming \
+  --completed-base /home/your-user/Downloads/completed
+```
+
+Run `./target/release/aria_move --check-config`, then configure your existing aria2 to use the full path to that executable as its `on-download-complete` hook. A source build does **not** automatically set up the Debian package's systemd service or RPC server.
+
+## Updates and removal
+
+### Update on Debian/Ubuntu
+
+Download the newer `.deb` from [Releases](https://github.com/macg4dave/Aria_Move_Rust/releases) and install it over the existing package:
+
+```bash
+sudo apt install ./aria-move_VERSION_ARCH.deb
+```
+
+Replace `VERSION_ARCH` with the actual filename. Local package configuration is handled by Debian's normal package-upgrade rules; read any prompts before replacing a changed config file.
+
+### Uninstall
+
+Remove the package:
 
 ```bash
 sudo apt remove aria-move
-# Also remove package configuration:
+```
+
+Or remove the package and its packaged configuration:
+
+```bash
 sudo apt purge aria-move
 ```
 
-Downloads, logs and the service account remain after removal and purge to protect your files. Reinstallation reuses them.
+**Your downloads are not deleted** by package removal or purge. The installer also retains state, logs and the service account to avoid losing data. Only delete retained directories manually after checking they contain nothing you still need.
 
 ## Troubleshooting
 
-- Service failed: inspect `journalctl -u aria-move -e` and run `sudo -u aria-move aria_move --check-config`.
-- Permission denied: check the service account's storage and log access. Custom paths also need a systemd writable-path override.
-- Nothing moved: check the completion hook, move log and adjacent .aria2 control files.
-- Network filesystem lock errors: `--disable-locks` removes concurrent-move protection; use only when necessary.
-- Windows access denied: close programs holding the source and retry.
-
-## Development
-
-Rust 1.99+ and a native C linker are required.
+### The service isn't running
 
 ```bash
-cargo build --release --locked
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-targets --all-features
-cargo test --workspace --doc --all-features
+systemctl status aria-move
+sudo journalctl -u aria-move -n 50 --no-pager
+sudo -u aria-move aria_move --check-config
 ```
 
-See [packaging](docs/RELEASING.md), [validation](docs/VALIDATION.md), [installer review](docs/INSTALLER_REVIEW.md) and [architecture](docs/ARCHITECTURE.md). [MIT license](LICENSE).
+Read the first error message. A missing folder, incorrect configuration or another process using aria2's port may prevent startup.
 
-For single-file hooks and explicit source paths, only the selected entry moves,
-even inside a category folder. Multi-file aria2 downloads must have their own
-top-level folder under `download_base`; their hook passes only the first file,
-so the mover selects that download folder. Use `--source-path` with the exact
-folder for another layout. Completed `.tmp`, `.part` and `.crdownload` files are
-accepted; aria2 control files still block a move.
+### The download finishes, but doesn't move
+
+Check the move log:
+
+```bash
+sudo tail -n 50 /var/log/aria-move/aria_move.log
+```
+
+Make sure aria2 has the `on-download-complete` setting pointing to the correct executable, and that `download_base` matches aria2's incoming directory. Aria Move intentionally refuses files that still have aria2 control files indicating an incomplete download.
+
+### Permission denied
+
+Check whether the service account can access the actual download storage. On Debian/Ubuntu the bundled account is called `aria-move`. If you changed folders, follow **all** the steps under [Use your own download folders](#use-your-own-download-folders), including the systemd override. For a NAS, check mount permissions as well.
+
+Avoid using `chmod -R 777` as a shortcut.
+
+### My web UI cannot connect
+
+First check the service:
+
+```bash
+systemctl status aria-move
+```
+
+Then check the client's host, port, RPC path and secret token. The bundled RPC server uses **localhost:6800**, not a publicly listening address. If your web UI runs elsewhere, use the [SSH forwarding instructions](#connecting-from-another-computer). If port 6800 is already in use, change `rpc-listen-port` in `/etc/aria_move/aria2.conf` and restart the service.
+
+### I see an HTTP 400 error at `/jsonrpc`
+
+That can simply mean you opened the JSON-RPC endpoint as if it were a normal web page. It expects a properly formatted RPC request; it **does not display a web interface**. Connect with a compatible aria2 client instead.
+
+### A destination file already exists
+
+Aria Move preserves existing files rather than replacing them. Check the completed folder and resolve the name conflict before retrying.
+
+### Network drive or file lock errors
+
+Some network filesystems do not support the locking behaviour Aria Move expects. The `--disable-locks` option exists, but removes protection against concurrent moves. Use it only when you understand the risk and cannot fix the filesystem behaviour.
+
+### Still stuck?
+
+Open an [issue on GitHub](https://github.com/macg4dave/Aria_Move_Rust/issues) and include your operating system, how you installed Aria Move, the exact error, and relevant **redacted** log lines. **Never include your RPC token or private credentials.**
+
+## Useful reference
+
+| Option                                              | What it does                                                         |
+| --------------------------------------------------- | -------------------------------------------------------------------- |
+| `--help`                                            | Show all available commands and options                              |
+| `--version`                                         | Show installed version                                               |
+| `--print-config`                                    | Show the active configuration path                                   |
+| `--check-config`                                    | Check the settings without moving files                              |
+| `--init --download-base PATH --completed-base PATH` | Create a standalone configuration (won't overwrite an existing file) |
+| `--dry-run`                                         | Preview a move                                                       |
+| `--source-path PATH`                                | Explicitly select an item to move                                    |
+| `--config PATH`                                     | Use a particular XML configuration file                              |
+| `--debug`                                           | Enable detailed logging                                              |
+| `--preserve-metadata`                               | Preserve more file metadata when copying across filesystems          |
+
+More technical information is available in [installation notes](docs/INSTALLATION.md), [architecture](docs/ARCHITECTURE.md) and [release/build notes](docs/RELEASING.md).
+
+## Licence
+
+Aria Move is released under the [MIT Licence](LICENSE).
