@@ -70,7 +70,7 @@ Clippy passed; Docker amd64 and ARM64 all-feature tests, Clippy, Lintian and the
 complete package lifecycle passed. The real-hook concurrency check also passed
 on both architectures: ten small moves finished while the 2 GiB copy was paused,
 and every SHA-256 matched. Logs: target/logic-review-windows-tests.log and
-target/release-check/. These fixes are local changes after published v1.5.0.
+target/release-check/. These fixes are included in the refreshed v1.5.0 release.
 
 ## Debian package lifecycle
 
@@ -93,8 +93,9 @@ and ARM64 under QEMU: all ten small files completed before the paused large
 copy resumed; all eleven output hashes matched, with no sources or staging
 left behind. Native Linux and Windows Rust tests also cover source-specific
 lock independence, duplicate calls, cancellation and concurrent file/directory
-name collisions. The concurrency fix is a working-tree change after the
-published v1.5.0 release; that release's binaries retain the earlier locking.
+name collisions. The refreshed v1.5.0 release includes these fixes. The original v1.5.0
+assets published earlier on the same day used directory-wide locking; replace
+those installations with the refreshed binaries and verify SHA256SUMS.
 
 The release gate is `bash scripts/docker-release-check.sh` (Linux or Git Bash).
 It builds and tests the exact amd64/arm64 `.deb` files and retains logs, checksums
