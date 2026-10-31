@@ -1,6 +1,5 @@
 # Cargo config to make local developer builds treat lints as warnings
-# This mirrors the CI behavior where lints (including clippy diagnostics)
-# are downgraded to warnings so they don't fail the build.
+# Retained local setting; the audit records its limitations and removal backlog.
 
 [env]
 RUSTFLAGS = "-Cap-lints=warn"

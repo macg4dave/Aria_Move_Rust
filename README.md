@@ -3,7 +3,6 @@
 [![Release](https://img.shields.io/github/v/release/macg4dave/Aria_Move_Rust?display_name=tag&sort=semver)](https://github.com/macg4dave/Aria_Move_Rust/releases)
 [![Downloads](https://img.shields.io/github/downloads/macg4dave/Aria_Move_Rust/total)](https://github.com/macg4dave/Aria_Move_Rust/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](#license)
-[![CI](https://github.com/macg4dave/Aria_Move_Rust/actions/workflows/ci.yml/badge.svg)](https://github.com/macg4dave/Aria_Move_Rust/actions/workflows/ci.yml)
 
 **Move completed downloads safely and effortlessly.**
 
@@ -482,31 +481,25 @@ Recommended extensions:
 - `vadimcn.vscode-lldb`
 - `tamasfe.even-better-toml`
 
-The repository includes `.vscode/tasks.json` for build/test/clippy tasks.
+Run the Cargo quality commands above from the repository root.
 
 ---
 
-## Release process
+## Local packaging
 
-Releases are automated via:
+GitHub build and release automation has been removed. Build locally with
+`cargo build --release`; existing GitHub releases remain available independently.
 
-- **release-please** — creates release PRs with changelogs from conventional commits
-- **cargo-dist** — builds cross-platform binaries and uploads to GitHub Releases
+Local packaging helpers are retained:
 
-### Typical flow
+- `scripts/release-dry-run.sh` uses cargo-dist without uploading artifacts.
+- `scripts/docker-build.sh --deb` builds and tests in Docker and requests a Debian package.
+- `scripts/cross-build.sh <target> --release` uses cross for local cross builds.
 
-1. Merge PRs with conventional commit titles (`feat:`, `fix:`, `chore:`, etc.)
-2. Release Please opens a release PR automatically
-3. Review and merge the release PR
-4. GitHub Release is created with artifacts for all platforms
-
-### Manual artifact rebuild
-
-To rebuild artifacts for an existing tag:
-
-1. Go to **Actions** → **Release Artifacts**
-2. Click **Run workflow**
-3. Enter the tag name (e.g., `v1.0.0`)
+These legacy helpers have known toolchain/check limitations documented in
+[the audit](docs/ARCHITECTURE.md) and task D03 of the
+[backlog](docs/REFACTORING_BACKLOG.md). They were retained, not validated here.
+See [ROADMAP.md](ROADMAP.md) for the audit, architecture and measured local checks.
 
 ---
 
