@@ -250,6 +250,8 @@ ReadWritePaths=/srv/downloads/incoming /srv/downloads/completed
 
 Save and exit the editor. `RequiresMountsFor` helps with mounted drives; `ReadWritePaths` lets the protected service write to the new locations. These settings do not grant ordinary Linux file permissions, which must also be correct.
 
+Every `ReadWritePaths` entry must already exist; a missing or misspelled one stops the whole service from starting with `status=226/NAMESPACE`. If `log_file` is outside `/var/log/aria-move`, add the log file's directory too.
+
 ### 6. Check and restart
 
 ```bash

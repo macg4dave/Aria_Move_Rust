@@ -50,6 +50,11 @@ RequiresMountsFor=/srv/downloads/incoming /srv/downloads/completed
 ReadWritePaths=/srv/downloads/incoming /srv/downloads/completed
 ```
 
+Every `ReadWritePaths` entry must already exist, or systemd refuses to start the
+service at all (`status=226/NAMESPACE`, journal: "Failed to set up mount
+namespacing: ...: No such file or directory"). If `log_file` points outside
+`/var/log/aria-move`, also list the log's directory, or the mover cannot create it.
+
 The service filesystem is read-only except state/log directories and explicit
 writable paths. Home directories are inaccessible; prefer /srv or defaults.
 Run `sudo -u aria-move aria_move --check-config`, then restart. Validation checks

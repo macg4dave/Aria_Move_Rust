@@ -130,3 +130,19 @@ incoming/completed storage is under `/var/lib/aria-move`.
 The package download test now also supports `ARIA_MOVE_TEST_URL` for real
 DNS/TLS regression checks, while retaining its offline localhost mode. Both
 modes were exercised against the corrected installation.
+
+## Clean install: logging rework and install-time RPC secret
+
+Built `aria-move_1.5.0_arm64.deb` natively from the working tree (Rust 1.99.1,
+`dpkg-buildpackage -b -d` because Rust comes from rustup): 88 unit, 23 CLI and
+6 move tests plus the doc test passed; Lintian was clean. Purged aria-move and
+aria2, removed `/etc/aria_move`, `/var/lib/aria-move`, `/var/log/aria-move` and the
+service account, confirmed port 6800 free, then installed with APT.
+
+- `rpc-secret` created by postinst before first start; it and the runtime
+  `/run/aria-move/aria2.conf` are `0600 aria-move`. The runtime config has exactly
+  one `rpc-secret` line, the conffile none, and aria2's argv carries no token.
+- Wrong token rejected (`Unauthorized`); offline and HTTPS
+  (`ARIA_MOVE_TEST_URL=https://deb.debian.org/debian/README`) RPC downloads moved.
+- Logging at the default `warn`: successful moves left the log file empty; a
+  failed move was written to both `journalctl -t aria_move` and the log file.
