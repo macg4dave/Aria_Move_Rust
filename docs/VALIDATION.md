@@ -52,6 +52,12 @@ macOS retains its native implementation; this pass adds no macOS test requiremen
 
 ## Debian package lifecycle
 
+The release gate is `bash scripts/docker-release-check.sh` (Linux or Git Bash).
+It builds and tests the exact amd64/arm64 `.deb` files and retains logs, checksums
+and PASS markers in `target/release-check`. See [RELEASING.md](RELEASING.md) for
+Docker requirements and the separate Windows packaging command. The nspawn
+workflow below remains useful for an additional independent test environment.
+
 Also test a real hostname-based HTTPS download on a networked test server with
 the bundled service running. Localhost-only tests cannot detect DNS failures in
 the service sandbox:

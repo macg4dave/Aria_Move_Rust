@@ -1,0 +1,9 @@
+FROM debian:bookworm
+ENV container=docker
+RUN apt-get update && apt-get install -y --no-install-recommends systemd systemd-sysv dbus aria2 adduser python3 ca-certificates && rm -f /usr/sbin/policy-rc.d && rm -rf /var/lib/apt/lists/*
+# These operate on the shared Docker VM kernel, not on guest application state.
+# In particular, binfmt shutdown must not unregister the host ARM64 emulator.
+RUN systemctl mask systemd-binfmt.service proc-sys-fs-binfmt_misc.automount systemd-sysctl.service e2scrub_reap.service
+# Docker manages /etc/resolv.conf; a container-local resolver must not replace it.
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]
