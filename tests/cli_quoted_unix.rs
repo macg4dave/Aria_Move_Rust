@@ -1,23 +1,14 @@
 #[cfg(unix)]
+#[path = "common/config_fixture.rs"]
+mod fixture;
+#[cfg(unix)]
 mod unix_quoted {
     use assert_cmd::cargo;
     use std::fs;
     use std::process::Command;
     use tempfile::tempdir;
 
-    fn write_cfg(path: &std::path::Path, download: &std::path::Path, completed: &std::path::Path) {
-        let xml = format!(
-            r#"<config>
-  <download_base>{}</download_base>
-  <completed_base>{}</completed_base>
-  <log_level>quiet</log_level>
-  <preserve_metadata>false</preserve_metadata>
-</config>"#,
-            download.display(),
-            completed.display()
-        );
-        fs::write(path, xml).unwrap();
-    }
+    use super::fixture::write_cfg;
 
     #[test]
     fn three_arg_single_quoted_directory_with_trailing_slash_moves_ok() {
@@ -122,5 +113,60 @@ mod unix_quoted {
         assert!(dest.exists(), "dest directory should exist");
         assert!(dest.join("a.txt").exists(), "inner file should move");
         assert!(!dir.exists(), "source directory should be removed");
+    }
+    #[test]
+    fn literal_quoted_bare_name_wins_over_decoded_name() {
+        let td = tempdir().unwrap();
+        let base = fs::canonicalize(td.path()).unwrap();
+        let download = base.join("incoming");
+        let completed = base.join("completed");
+        fs::create_dir(&download).unwrap();
+        fs::create_dir(&completed).unwrap();
+        let config = base.join("config.xml");
+        write_cfg(&config, &download, &completed);
+        fs::write(download.join("'literal'"), b"quoted").unwrap();
+        fs::write(download.join("literal"), b"unquoted").unwrap();
+        let output = Command::new(cargo::cargo_bin!("aria_move"))
+            .current_dir(&base)
+            .env("ARIA_MOVE_CONFIG", &config)
+            .arg("'literal'")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(fs::read(completed.join("'literal'")).unwrap(), b"quoted");
+        assert_eq!(fs::read(download.join("literal")).unwrap(), b"unquoted");
+    }
+
+    #[test]
+    fn explicit_non_unicode_path_is_preserved() {
+        use std::os::unix::ffi::OsStringExt;
+        let td = tempdir().unwrap();
+        let base = fs::canonicalize(td.path()).unwrap();
+        let download = base.join("incoming");
+        let completed = base.join("completed");
+        fs::create_dir(&download).unwrap();
+        fs::create_dir(&completed).unwrap();
+        let config = base.join("config.xml");
+        write_cfg(&config, &download, &completed);
+        let name = std::ffi::OsString::from_vec(b"data-\xff".to_vec());
+        let source = download.join(&name);
+        fs::write(&source, b"bytes").unwrap();
+        let output = Command::new(cargo::cargo_bin!("aria_move"))
+            .env("ARIA_MOVE_CONFIG", &config)
+            .arg("--source-path")
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(fs::read(completed.join(name)).unwrap(), b"bytes");
+        assert!(!source.exists());
     }
 }

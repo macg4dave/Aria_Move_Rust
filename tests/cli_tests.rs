@@ -62,3 +62,8 @@ fn apply_overrides_sets_flags() {
     assert!(cfg.dry_run);
     assert!(cfg.preserve_metadata);
 }
+
+#[test]
+fn invalid_log_level_is_a_cli_error() {
+    assert!(Args::try_parse_from(["aria_move", "--log-level", "nonsense"]).is_err());
+}

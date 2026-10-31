@@ -57,7 +57,7 @@ pub struct Args {
     pub debug: bool,
 
     /// Set log level. One of: quiet, normal, info, debug.
-    #[arg(long, help = "Set log level: quiet, normal, info, debug")]
+    #[arg(long, value_parser = parse_log_level_argument, help = "Set log level: quiet, normal, info, debug")]
     pub log_level: Option<String>,
 
     /// Print where aria_move will look for the config file (or ARIA_MOVE_CONFIG if set), then exit.
@@ -122,10 +122,10 @@ impl Args {
     ///    when `num_files` and `SOURCE_PATH` are absent.
     pub fn resolved_source(&self) -> Option<std::path::PathBuf> {
         if let Some(p) = &self.source_path {
-            return Some(Self::sanitize_path(p));
+            return Some(p.clone());
         }
         if let Some(p) = &self.source_path_pos {
-            return Some(Self::sanitize_path(p));
+            return Some(p.clone());
         }
 
         // One-arg convenience: treat first positional as the path when the
@@ -137,47 +137,10 @@ impl Args {
             && self.source_path_pos.is_none()
             && let Some(t) = &self.task_id
         {
-            return Some(Self::sanitize_str(t));
+            return Some(PathBuf::from(t));
         }
 
         None
-    }
-
-    // Removed heuristic helper; we accept single positional as path unconditionally.
-    #[inline]
-    fn sanitize_path(p: &std::path::Path) -> PathBuf {
-        Self::sanitize_str(&p.to_string_lossy())
-    }
-
-    #[inline]
-    fn sanitize_str(s: &str) -> PathBuf {
-        // Trim surrounding single/double quotes if user invoked with quotes in PowerShell or CMD.
-        // Also trim any trailing unmatched quote caused by shell escaping mistakes.
-        let trimmed = s.trim();
-        let mut inner = if (trimmed.starts_with('"') && trimmed.ends_with('"'))
-            || (trimmed.starts_with('\'') && trimmed.ends_with('\''))
-        {
-            trimmed[1..trimmed.len() - 1].to_string()
-        } else {
-            trimmed.trim_matches(|c| c == '\'' || c == '"').to_string()
-        };
-
-        // Remove any stray embedded quotes that may remain (e.g., "'path'/")
-        inner.retain(|c| c != '\'' && c != '"');
-
-        // Handle a trailing directory separator or backslash introduced by quoting/escaping.
-        // Case 1: Windows/PowerShell often leaves a trailing backslash inside single quotes.
-        // Case 2: Unix single quotes combined with a trailing slash may leave the trailing quote
-        //         preserved incorrectly before sanitization (already trimmed) but leave an extra slash.
-        // We remove ONE trailing slash or backslash if present to match existing test expectations.
-        if inner.ends_with('\\') || inner.ends_with('/') {
-            // Avoid stripping root "/" or "C:/" patterns inadvertently.
-            if inner.len() > 1 {
-                inner.pop();
-            }
-        }
-
-        PathBuf::from(inner)
     }
 
     /// Effective log level derived from flags.
@@ -209,6 +172,9 @@ impl Args {
         if self.preserve_permissions {
             cfg.preserve_permissions = true;
         }
+        if cfg.preserve_metadata {
+            cfg.preserve_permissions = false;
+        }
         if self.disable_locks {
             cfg.disable_locks = true;
         }
@@ -217,4 +183,8 @@ impl Args {
 
 pub fn parse() -> Args {
     Args::parse()
+}
+
+fn parse_log_level_argument(value: &str) -> Result<String, String> {
+    value.parse::<LogLevel>().map(|_| value.to_owned())
 }

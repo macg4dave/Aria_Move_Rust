@@ -1,31 +1,7 @@
-//! Free-space helpers and human-readable byte formatting.
-//!
-//! Responsibilities:
-//! - `free_space_bytes`: platform-specific free space query on the filesystem of a path.
-//! - `ensure_space_for_copy`: guard enforcing a small cushion beyond required bytes (to cover metadata, journal, temp files).
-//! - `format_bytes`: compact, human-friendly formatting for diagnostics.
-//! - `has_space`: pure helper for deterministic unit testing of space logic.
-//!
-//! Design notes:
-//! - A fixed cushion (`SPACE_CUSHION_BYTES`) avoids borderline failures when post-copy metadata updates or temp files consume additional blocks.
-//! - `ensure_space_for_copy` treats a non-existent destination path as a prospective file and falls back to its parent directory for the space check.
-//! - Space checks are inherently racy; the functions provide a best-effort pre-flight validation only.
-//! - We use `f_bavail` (user-available blocks) rather than `f_bfree` on Unix for conservative estimation.
-//! - Formatting trims trailing `.0` for cleaner output (e.g. `1 GiB` instead of `1.0 GiB`).
-//!
-//! Potential future enhancements:
-//! - Make cushion configurable from a higher-level config.
-//! - Add an error variant instead of generic anyhow.
-//! - Expose raw bytes in error metadata (already embedded via formatting).
-
+//! Shared copy-space policy and byte formatting. Platform owns the syscall.
+//! Queries are advisory: actual write failures still propagate and preserve sources.
 use crate::errors::AriaMoveError;
-use std::io;
 use std::path::Path;
-
-#[cfg(unix)]
-use std::os::unix::ffi::OsStrExt;
-#[cfg(windows)]
-use std::os::windows::ffi::OsStrExt;
 
 /// Binary-unit formatting (KiB/MiB/GiB) rounded to one decimal; trims trailing `.0`.
 pub(super) fn format_bytes(n: u64) -> String {
@@ -57,103 +33,37 @@ pub(super) const SPACE_CUSHION_BYTES: u64 = 4 * 1024 * 1024; // 4 MiB
 
 /// Pure function: returns true if `free` bytes is >= required + cushion.
 pub(super) fn has_space(free: u64, required: u64) -> bool {
-    free >= required.saturating_add(SPACE_CUSHION_BYTES)
+    required
+        .checked_add(SPACE_CUSHION_BYTES)
+        .is_some_and(|need| free >= need)
 }
 
 /// Ensure the destination filesystem has at least `required` bytes plus a small cushion.
 /// The cushion helps avoid borderline failures from metadata, journal, and temp usage.
-pub(super) fn ensure_space_for_copy(dst_dir: &Path, required: u64) -> Result<(), AriaMoveError> {
-    // Resolve actual directory for the free space query:
-    // - If `dst_dir` exists and is a directory: use it directly.
-    // - If it does not exist: attempt its parent (prospective file case).
-    // - Otherwise: fall back to given path (error will be propagated by stat call if invalid).
-    let query_path: &Path = if dst_dir.is_dir() {
-        dst_dir
-    } else if !dst_dir.exists() {
-        dst_dir.parent().unwrap_or(dst_dir)
-    } else {
-        dst_dir // Exists but not directory (caller may have passed file path); use its parent if present.
-    };
-
-    let free = free_space_bytes(query_path).map_err(|_| AriaMoveError::InsufficientSpace {
-        required: (required as u128).saturating_add(SPACE_CUSHION_BYTES as u128),
-        available: 0u128,
-        dest: query_path.to_path_buf(),
-    })?;
-    if !has_space(free, required) {
-        return Err(AriaMoveError::InsufficientSpace {
-            required: (required as u128).saturating_add(SPACE_CUSHION_BYTES as u128),
-            available: free as u128,
-            dest: query_path.to_path_buf(),
-        });
-    }
-    Ok(())
-}
-
-/// Return available free space (in bytes) on the filesystem hosting `path`.
-#[cfg(unix)]
-pub(super) fn free_space_bytes(path: &Path) -> io::Result<u64> {
-    use libc::statvfs;
-    use std::mem::MaybeUninit;
-
-    let mut stat: MaybeUninit<statvfs> = MaybeUninit::uninit();
-    let cpath = std::ffi::CString::new(path.as_os_str().as_bytes())
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains NUL"))?;
-
-    let rc = unsafe { libc::statvfs(cpath.as_ptr(), stat.as_mut_ptr()) };
-    if rc != 0 {
-        return Err(io::Error::last_os_error());
-    }
-
-    let s = unsafe { stat.assume_init() };
-
-    // On some platforms (e.g., older macOS), f_frsize may be 0; fall back to f_bsize.
-    // Convert underlying C types into u64 for arithmetic.
-    fn block_size_u64(s: &statvfs) -> u64 {
-        if s.f_frsize != 0 {
-            s.f_frsize as u64
-        } else {
-            s.f_bsize as u64
+pub(super) fn ensure_space_for_copy(dst_dir: &Path, required: u64) -> anyhow::Result<()> {
+    use anyhow::Context;
+    let mut query = dst_dir;
+    while !query.is_dir() {
+        query = query
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        if query == Path::new(".") {
+            break;
         }
     }
-
-    let block_size = block_size_u64(&s);
-    Ok((s.f_bavail as u64).saturating_mul(block_size))
-}
-
-/// Return available free space (in bytes) on the filesystem hosting `path`.
-#[cfg(windows)]
-pub(super) fn free_space_bytes(path: &Path) -> io::Result<u64> {
-    use std::iter::once;
-    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
-
-    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(once(0)).collect();
-
-    let mut free_avail: u64 = 0;
-    let mut _total: u64 = 0;
-    let mut _total_free: u64 = 0;
-
-    let ok = unsafe {
-        GetDiskFreeSpaceExW(
-            wide.as_ptr(),
-            &mut free_avail as *mut u64,
-            &mut _total as *mut u64,
-            &mut _total_free as *mut u64,
-        )
-    };
-    if ok == 0 {
-        return Err(io::Error::last_os_error());
+    let free = crate::platform::check_disk_space(query)
+        .with_context(|| format!("query free space at {}", query.display()))?;
+    if !has_space(free, required) {
+        return Err(AriaMoveError::InsufficientSpace {
+            required: required as u128 + SPACE_CUSHION_BYTES as u128,
+            available: free as u128,
+            dest: dst_dir.to_path_buf(),
+        }
+        .into());
     }
-    Ok(free_avail)
-}
-
-/// Fallback for unsupported targets: report “unsupported”.
-#[cfg(not(any(unix, windows)))]
-pub(super) fn free_space_bytes(_path: &Path) -> io::Result<u64> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "free space query not supported on this platform",
-    ))
+    tracing::debug!(required = %format_bytes(required), available = %format_bytes(free), "space preflight");
+    Ok(())
 }
 
 // ---------- Tests ----------

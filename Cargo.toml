@@ -2,6 +2,7 @@
 name = "aria_move"
 version = "1.0.0"
 edition = "2024"
+rust-version = "1.99"
 license = "MIT"
 authors = ["Dave"]
 description = "A robust tool to move completed downloads for aria2c."
@@ -10,12 +11,8 @@ description = "A robust tool to move completed downloads for aria2c."
 anyhow = "1"
 filetime = "0.2"
 dunce = "1.0"
-libc = "0.2" # + added (Unix)
-windows-sys = { version = "0.61.2", features = [
-    "Win32_Storage_FileSystem",
-] } # + added (Windows)
 clap = { version = "4.2", features = ["derive"] }
-tracing = "0.1"
+tracing = { version = "0.1", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3", features = [
     "fmt",
     "env-filter",
@@ -24,37 +21,45 @@ tracing-subscriber = { version = "0.3", features = [
 tracing-appender = "0.2"
 walkdir = "2.3"
 rayon = "1.7"
-tempfile = { version = "3", optional = true }
+tempfile = "3"
 serde = { version = "1.0", features = ["derive"] }
-quick-xml = { version = "0.38.3", features = ["serialize"] }
+quick-xml = { version = "0.41", features = ["serialize"] }
 dirs = "6.0.0"
 chrono = "0.4"
-fs2 = "0.4"
-ctrlc = "3.4"
+ctrlc = { version = "3.4", features = ["termination"] }
 thiserror = "2.0.17"
 owo-colors = "4.2.3"
-atty = "0.2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 xattr = { version = "1", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
 assert_cmd = "2.0"
-tempfile = "3.6"
 assert_fs = "1.0"
-serial_test = "3.2"
 serde_json = "1.0"
 
 [features]
-test-helpers = ["tempfile"]
+test-helpers = []
 xattrs = ["dep:xattr"]
 
 [workspace.metadata.dist]
+cargo-dist-version = "0.32.0"
+ci = []
+installers = []
 # Configure cargo-dist release targets for common platforms
 targets = [
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",
-    # macOS universal2 (combines x86_64 + arm64 into one fat binary)
-    "universal-apple-darwin",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
     "x86_64-pc-windows-msvc",
 ]
 # Enable checksums and a single tar/zip per target (defaults are fine)
-checksum = true
+checksum = "sha256"
+
+[profile.dist]
+inherits = "release"

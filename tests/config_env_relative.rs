@@ -2,17 +2,14 @@ use std::fs;
 use std::process::Command;
 use tempfile::tempdir;
 // Use macro to avoid deprecated cargo_bin function
-use serial_test::serial;
 
 // This test uses a relative ARIA_MOVE_CONFIG path; it MUST run in isolation because it changes CWD.
 #[test]
-#[serial]
 fn relative_env_config_path_resolved() {
     let td = tempdir().unwrap();
     let base = fs::canonicalize(td.path()).unwrap();
 
     // Change current directory to temp base for relative path resolution
-    std::env::set_current_dir(&base).expect("chdir to temp base");
 
     let rel_cfg = "rel_config.xml"; // relative path
     let download_base = base.join("incoming");
@@ -38,6 +35,7 @@ fn relative_env_config_path_resolved() {
 
     let me = assert_cmd::cargo::cargo_bin!("aria_move");
     let out = Command::new(me)
+        .current_dir(&base)
         .env("ARIA_MOVE_CONFIG", rel_cfg)
         .arg(&src)
         .output()

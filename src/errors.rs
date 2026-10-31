@@ -32,6 +32,10 @@ pub enum AriaMoveError {
     #[error("Operation interrupted by user")]
     Interrupted,
 
+    /// An I/O failure not covered by a specific policy error.
+    #[error("I/O error at {path}: {context}")]
+    Io { path: PathBuf, context: String },
+
     // --- Resolution-specific errors ---
     /// Provided path exists but is not a regular file (e.g., directory, symlink if disallowed).
     #[error("Provided path is not a regular file: {0}")]
@@ -55,6 +59,7 @@ impl AriaMoveError {
             AriaMoveError::PermissionDenied { .. } => "permission_denied",
             AriaMoveError::InsufficientSpace { .. } => "insufficient_space",
             AriaMoveError::Interrupted => "interrupted",
+            AriaMoveError::Io { .. } => "io_error",
             AriaMoveError::ProvidedNotFile(_) => "provided_not_file",
             AriaMoveError::Disappeared(_) => "disappeared",
             AriaMoveError::NoneFound(_) => "none_found",
@@ -71,12 +76,19 @@ impl AriaMoveError {
                 path,
                 context: "permission denied".to_string(),
             },
-            _ => AriaMoveError::PermissionDenied {
+            io::ErrorKind::Interrupted => AriaMoveError::Interrupted,
+            _ => AriaMoveError::Io {
                 path,
                 context: format!("io error: {:?}", err.kind()),
             },
         }
     }
+}
+
+/// Preserve the OS error as a cause while exposing stable typed classification.
+pub(crate) fn io_context(path: &std::path::Path, error: io::Error) -> anyhow::Error {
+    let classification = AriaMoveError::from_io(path, &error);
+    anyhow::Error::new(error).context(classification)
 }
 
 #[cfg(test)]
@@ -87,6 +99,14 @@ mod tests {
 
     #[test]
     fn code_mappings_are_stable() {
+        assert_eq!(
+            AriaMoveError::Io {
+                path: PathBuf::from("/x"),
+                context: "error".into()
+            }
+            .code(),
+            "io_error"
+        );
         assert_eq!(
             AriaMoveError::SourceNotFound(PathBuf::from("/x")).code(),
             "source_not_found"
@@ -155,10 +175,10 @@ mod tests {
 
         let other = io::Error::from(io::ErrorKind::Other);
         let e = AriaMoveError::from_io("/x", &other);
-        if let AriaMoveError::PermissionDenied { context, .. } = e {
+        if let AriaMoveError::Io { context, .. } = e {
             assert!(context.contains("io error"));
         } else {
-            panic!("expected PermissionDenied for Other kind");
+            panic!("expected Io for Other kind");
         }
     }
 }

@@ -5,7 +5,7 @@ Shared Rust guidance and project contracts:
 @AGENTS.md
 @PROJECT_RULES.md
 
-Maintenance plans and historical observations live in ROADMAP.md.
+Maintenance plans and historical observations live in docs/REFACTORING_BACKLOG.md.
 
 ## Claude Code specifics
 

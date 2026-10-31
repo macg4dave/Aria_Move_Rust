@@ -14,8 +14,7 @@ use tracing::{trace, warn};
 /// Preserve metadata on `dest` using already-fetched `src_meta`.
 /// Callers pass src metadata to avoid re-statting the source repeatedly.
 /// Preserve metadata on `dest` using already-fetched `src_meta`.
-/// If `strict` is true, any failure to set times/permissions returns an error.
-/// If `strict` is false, failures are logged and ignored.
+/// Best effort: failures are logged and ignored.
 pub fn preserve_metadata(dest: &Path, src_meta: &fs::Metadata) -> Result<()> {
     // 1) Timestamps
     #[cfg(unix)]
@@ -103,7 +102,9 @@ pub fn preserve_permissions_only(dest: &Path, src_meta: &fs::Metadata) -> Result
         use std::os::unix::fs::PermissionsExt;
         let src_mode = src_meta.permissions().mode() & 0o777;
         let perms = fs::Permissions::from_mode(src_mode);
-        let _ = fs::set_permissions(dest, perms);
+        if let Err(e) = fs::set_permissions(dest, perms) {
+            warn!(path = %dest.display(), error = %e, "failed to preserve permissions");
+        }
     }
     // Windows: mirror readonly attribute
     #[cfg(windows)]
@@ -111,7 +112,9 @@ pub fn preserve_permissions_only(dest: &Path, src_meta: &fs::Metadata) -> Result
         if let Ok(meta) = fs::metadata(dest) {
             let mut perms = meta.permissions();
             perms.set_readonly(src_meta.permissions().readonly());
-            let _ = fs::set_permissions(dest, perms);
+            if let Err(e) = fs::set_permissions(dest, perms) {
+                warn!(path = %dest.display(), error = %e, "failed to preserve permissions");
+            }
         }
     }
     Ok(())
@@ -119,14 +122,12 @@ pub fn preserve_permissions_only(dest: &Path, src_meta: &fs::Metadata) -> Result
 
 /// Preserve extended attributes (xattrs) from source path to destination path.
 /// - Requires the "xattrs" feature (otherwise this is a no-op Ok(()))
-/// - On unsupported platforms or if listing/setting fails:
-///   * strict=false => log and continue
-///   * strict=true  => return Err
+///
+/// Listing/setting failures are diagnosed and ignored (best effort).
 pub fn preserve_xattrs(src: &Path, dest: &Path) -> Result<()> {
-    #[cfg(feature = "xattrs")]
+    #[cfg(all(unix, feature = "xattrs"))]
     {
         use tracing::{trace, warn};
-        let mut _had_error = false; // retained for future diagnostics aggregation
         // Attempt to list xattrs on source
         match xattr::list(src) {
             Ok(names) => {
@@ -136,7 +137,6 @@ pub fn preserve_xattrs(src: &Path, dest: &Path) -> Result<()> {
                             if let Err(e) = xattr::set(dest, &name, &value) {
                                 let name_disp = name.to_string_lossy();
                                 warn!(src=%src.display(), dest=%dest.display(), xattr=%name_disp, error=%e, "failed to set xattr on destination");
-                                _had_error = true;
                             } else {
                                 let name_disp = name.to_string_lossy();
                                 trace!(src=%src.display(), dest=%dest.display(), xattr=%name_disp, size=value.len(), "preserved xattr");
@@ -147,7 +147,6 @@ pub fn preserve_xattrs(src: &Path, dest: &Path) -> Result<()> {
                             if let Err(e) = xattr::set(dest, &name, &[]) {
                                 let name_disp = name.to_string_lossy();
                                 warn!(src=%src.display(), dest=%dest.display(), xattr=%name_disp, error=%e, "failed to set empty xattr on destination");
-                                _had_error = true;
                             } else {
                                 let name_disp = name.to_string_lossy();
                                 trace!(src=%src.display(), dest=%dest.display(), xattr=%name_disp, size=0, "preserved empty xattr");
@@ -156,11 +155,9 @@ pub fn preserve_xattrs(src: &Path, dest: &Path) -> Result<()> {
                         Err(e) => {
                             let name_disp = name.to_string_lossy();
                             warn!(src=%src.display(), dest=%dest.display(), xattr=%name_disp, error=%e, "failed to read xattr value from source");
-                            _had_error = true;
                         }
                     }
                 }
-                // best-effort: ignore aggregated errors
             }
             Err(e) => {
                 warn!(src=%src.display(), error=%e, "failed to list xattrs; continuing (best-effort)");
@@ -168,7 +165,7 @@ pub fn preserve_xattrs(src: &Path, dest: &Path) -> Result<()> {
         }
         Ok(())
     }
-    #[cfg(not(feature = "xattrs"))]
+    #[cfg(not(all(unix, feature = "xattrs")))]
     {
         let _ = (src, dest); // silence unused warnings
         Ok(())

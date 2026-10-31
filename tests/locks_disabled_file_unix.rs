@@ -1,13 +1,13 @@
 #![cfg(unix)]
 
-use aria_move::{move_entry, Config};
+use aria_move::{Config, move_entry};
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use tempfile::tempdir;
 
-/// With ARIA_MOVE_DISABLE_LOCKS=1, moving a file should succeed even when the
+/// With Config.disable_locks=true, moving a file should succeed even when the
 /// destination directory denies read permission (no ability to open for O_RDONLY),
 /// as long as write+execute are allowed for creation and rename.
 #[test]
@@ -31,25 +31,21 @@ fn move_file_succeeds_when_dest_no_read_with_locks_disabled() {
     perms.set_mode(0o333);
     fs::set_permissions(&completed_base, perms).unwrap();
 
-    // Enable lock skipping
-    unsafe {
-        std::env::set_var("ARIA_MOVE_DISABLE_LOCKS", "1");
-    }
+    // Disable locking explicitly through configuration
 
-    let mut cfg = Config::default();
-    cfg.download_base = PathBuf::from(&download_base);
-    cfg.completed_base = PathBuf::from(&completed_base);
+    let cfg = Config {
+        disable_locks: true,
+        download_base: PathBuf::from(&download_base),
+        completed_base: PathBuf::from(&completed_base),
+        ..Config::default()
+    };
 
-    let dest = move_entry(&cfg, &src).expect("move should succeed without directory read perms when locks disabled");
+    let dest = move_entry(&cfg, &src)
+        .expect("move should succeed without directory read perms when locks disabled");
     assert!(dest.exists(), "destination should exist");
 
     // Cleanup: restore perms so tempdir can cleanly delete on all systems
     let mut restore = fs::metadata(&completed_base).unwrap().permissions();
     restore.set_mode(0o755);
     let _ = fs::set_permissions(&completed_base, restore);
-
-    // Unset env for future tests
-    unsafe {
-        std::env::remove_var("ARIA_MOVE_DISABLE_LOCKS");
-    }
 }

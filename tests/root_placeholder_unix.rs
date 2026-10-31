@@ -1,7 +1,7 @@
 #![cfg(unix)]
 
-use aria_move::config::validate_and_normalize;
 use aria_move::Config;
+use aria_move::config::validate_and_normalize;
 use std::path::PathBuf;
 
 /// On Unix (Linux/macOS), when running as root, we refuse to create the
@@ -16,12 +16,17 @@ fn root_rejects_placeholder_paths() {
         }
     }
 
-    let mut cfg = Config::default();
-    // Simulate an unedited default config
-    cfg.download_base = PathBuf::from("/path/to/incoming");
-    cfg.completed_base = PathBuf::from("/path/to/completed");
+    let mut cfg = Config {
+        download_base: PathBuf::from("/path/to/incoming"),
+        completed_base: PathBuf::from("/path/to/completed"),
+        ..Config::default()
+    };
 
-    let err = validate_and_normalize(&mut cfg).expect_err("expected refusal for placeholder paths as root");
+    let err = validate_and_normalize(&mut cfg)
+        .expect_err("expected refusal for placeholder paths as root");
     let msg = format!("{err}");
-    assert!(msg.contains("Refusing to create placeholder default path") || msg.contains("placeholder"), "unexpected error: {msg}");
+    assert!(
+        msg.contains("Refusing to create placeholder default path") || msg.contains("placeholder"),
+        "unexpected error: {msg}"
+    );
 }

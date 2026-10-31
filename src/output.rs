@@ -1,14 +1,10 @@
 use owo_colors::OwoColorize;
 use std::env;
-
-/// Small wrapper around stdout/stderr printing to provide consistent, colored
-/// user-facing messages. Colors are enabled only when output is a TTY.
-fn is_tty() -> bool {
-    atty::is(atty::Stream::Stdout)
-}
+use std::io::IsTerminal;
 
 #[inline]
-fn color_enabled() -> bool {
+/// Resolve color environment policy for a stream with the supplied terminal status.
+pub fn color_enabled(terminal: bool) -> bool {
     // Respect common env conventions first
     if env::var_os("NO_COLOR").is_some() {
         return false;
@@ -23,7 +19,7 @@ fn color_enabled() -> bool {
     {
         return false;
     }
-    is_tty()
+    terminal
 }
 
 #[derive(Copy, Clone)]
@@ -49,19 +45,47 @@ fn format_line(kind: Kind, msg: &str, color: bool) -> String {
 }
 
 pub fn print_info(msg: &str) {
-    println!("{}", format_line(Kind::Info, msg, color_enabled()));
+    println!(
+        "{}",
+        format_line(
+            Kind::Info,
+            msg,
+            color_enabled(std::io::stdout().is_terminal())
+        )
+    );
 }
 
 pub fn print_warn(msg: &str) {
-    eprintln!("{}", format_line(Kind::Warn, msg, color_enabled()));
+    eprintln!(
+        "{}",
+        format_line(
+            Kind::Warn,
+            msg,
+            color_enabled(std::io::stderr().is_terminal())
+        )
+    );
 }
 
 pub fn print_error(msg: &str) {
-    eprintln!("{}", format_line(Kind::Error, msg, color_enabled()));
+    eprintln!(
+        "{}",
+        format_line(
+            Kind::Error,
+            msg,
+            color_enabled(std::io::stderr().is_terminal())
+        )
+    );
 }
 
 pub fn print_success(msg: &str) {
-    println!("{}", format_line(Kind::Ok, msg, color_enabled()));
+    println!(
+        "{}",
+        format_line(
+            Kind::Ok,
+            msg,
+            color_enabled(std::io::stdout().is_terminal())
+        )
+    );
 }
 
 /// Print a plain user-facing line (no prefix). Use this for primary outputs

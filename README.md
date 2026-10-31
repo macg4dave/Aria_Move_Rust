@@ -15,7 +15,7 @@ A robust, cross-platform tool that relocates finished downloads from a staging a
 - **Zero-config start** — creates a secure template config on first run
 - **Atomic operations** — instant rename when source and dest are on same filesystem
 - **Cross-filesystem fallback** — reliable copy+verify+cleanup when rename isn't possible
-- **Security first** — symlink defense, permission validation, disk space checks (Unix)
+- **Security first** — symlink defense, permission validation, disk space checks
 - **Dry-run mode** — preview actions without touching files
 - **Flexible logging** — human-readable or JSON, multiple log levels
 - **Cross-platform** — Linux (x86_64, aarch64), macOS (universal2), Windows (x86_64)
@@ -377,8 +377,8 @@ aria_move [OPTIONS] [TASK_ID] [NUM_FILES] [SOURCE_PATH]
 | Copy+cleanup fallback | ✅ | ✅ | ✅ |
 | Preserve metadata | ✅ | ✅ | ⚠️ |
 | Extended attributes (xattrs) | ✅ | ✅ | ❌ |
-| Disk space check | ✅ | ✅ | ❌ |
-| Symlink defense | ✅ | ✅ | ❌ |
+| Disk space check | ✅ | ✅ | ✅ |
+| Symlink / reparse-point rejection | ✅ | ✅ | ✅ |
 
 ---
 
@@ -386,10 +386,9 @@ aria_move [OPTIONS] [TASK_ID] [NUM_FILES] [SOURCE_PATH]
 
 ### Prerequisites
 
-- [Rust toolchain](https://rustup.rs/) (stable)
+- [Rust toolchain](https://rustup.rs/) (stable, Rust 1.99 or newer)
 - Git
-- C toolchain + pkg-config (Linux/macOS)
-- OpenSSL dev headers (Linux: `libssl-dev`, Fedora: `openssl-devel`)
+- Native linker/C toolchain (Xcode tools, build-essential, or MSVC Build Tools)
 
 ### Build steps
 
@@ -409,9 +408,9 @@ cargo install --path .
 ### Quality checks
 
 ```bash
-cargo test
+cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
-cargo fmt --all --check
+cargo test --all --no-fail-fast
 ```
 
 ---
@@ -496,10 +495,19 @@ Local packaging helpers are retained:
 - `scripts/docker-build.sh --deb` builds and tests in Docker and requests a Debian package.
 - `scripts/cross-build.sh <target> --release` uses cross for local cross builds.
 
-These legacy helpers have known toolchain/check limitations documented in
-[the audit](docs/ARCHITECTURE.md) and task D03 of the
-[backlog](docs/REFACTORING_BACKLOG.md). They were retained, not validated here.
-See [ROADMAP.md](ROADMAP.md) for the audit, architecture and measured local checks.
+- `scripts/package-macos-universal.sh` combines native Intel/ARM builds with lipo.
+
+Install cargo-dist 0.32.0 for the local distribution script (`dist` executable).
+Local ZIP/checksum output is in `target/distrib`; Debian packages are in
+`target/debian`. The Docker helper uses Rust 1.99 and fails on check/package errors.
+On Linux/macOS, also run clippy/tests with `--all-features`. Dependency checks are
+`cargo deny --config deny.toml check` and `cargo audit`.
+
+All move/copy publication refuses replacement. Cross-device transfers stage and
+verify complete data before deleting sources. Legacy partial files are left
+untouched and are not trusted for resume. Dry runs do not create config files,
+base directories or locks; an explicitly configured log is the only write allowed.
+See [architecture](docs/ARCHITECTURE.md) and [validation](docs/VALIDATION.md).
 
 ---
 

@@ -28,7 +28,9 @@ fn build_tree(root: &Path) -> Vec<PathBuf> {
     ];
     for rel in layout.iter() {
         let p = root.join(rel);
-        if let Some(parent) = p.parent() { fs::create_dir_all(parent).unwrap(); }
+        if let Some(parent) = p.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
         fs::write(&p, rel.as_bytes()).unwrap();
         rel_files.push(PathBuf::from(rel));
     }
@@ -45,9 +47,8 @@ fn collect_relative_files(root: &Path) -> HashSet<PathBuf> {
 }
 
 #[test]
-fn move_dir_copy_fallback_preserves_all_files() -> Result<(), Box<dyn std::error::Error>> {
-    // Force copy path (no atomic rename) to exercise copy branch thoroughly.
-    unsafe { std::env::set_var("ARIA_MOVE_FORCE_DIR_COPY", "1"); }
+fn move_dir_preserves_all_files() -> Result<(), Box<dyn std::error::Error>> {
+    // Public move coverage; forced fallback is tested inside dir_move.rs.
 
     let download = tempdir()?;
     let completed = tempdir()?;
@@ -57,6 +58,10 @@ fn move_dir_copy_fallback_preserves_all_files() -> Result<(), Box<dyn std::error
     fs::create_dir_all(&src_dir)?;
     let expected = build_tree(&src_dir);
 
+    let expected_bytes: std::collections::HashMap<_, _> = expected
+        .iter()
+        .map(|p| (p.clone(), fs::read(src_dir.join(p)).unwrap()))
+        .collect();
     let before_set: HashSet<_> = expected.into_iter().collect();
 
     let dest = fs_ops::move_dir(&cfg, &src_dir)?;
@@ -64,14 +69,22 @@ fn move_dir_copy_fallback_preserves_all_files() -> Result<(), Box<dyn std::error
     assert!(dest.exists(), "destination directory should exist");
 
     let after_set = collect_relative_files(&dest);
-    assert_eq!(before_set, after_set, "mismatch in copied file set: before={:?} after={:?}", before_set, after_set);
+    assert_eq!(
+        before_set, after_set,
+        "mismatch in copied file set: before={:?} after={:?}",
+        before_set, after_set
+    );
 
     // Also verify file contents match their relative names we wrote.
     for rel in &after_set {
         let contents = fs::read(dest.join(rel))?;
-        assert_eq!(contents, rel.to_string_lossy().as_bytes(), "content mismatch for {:?}", rel);
+        assert_eq!(
+            contents,
+            expected_bytes.get(rel).unwrap().as_slice(),
+            "content mismatch for {:?}",
+            rel
+        );
     }
 
-    unsafe { std::env::remove_var("ARIA_MOVE_FORCE_DIR_COPY"); }
     Ok(())
 }

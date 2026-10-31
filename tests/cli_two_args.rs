@@ -3,19 +3,9 @@ use std::fs;
 use std::process::Command;
 use tempfile::tempdir;
 
-fn write_cfg(path: &std::path::Path, download: &std::path::Path, completed: &std::path::Path) {
-    let xml = format!(
-        r#"<config>
-  <download_base>{}</download_base>
-  <completed_base>{}</completed_base>
-  <log_level>quiet</log_level>
-  <preserve_metadata>false</preserve_metadata>
-</config>"#,
-        download.display(),
-        completed.display()
-    );
-    fs::write(path, xml).unwrap();
-}
+#[path = "common/config_fixture.rs"]
+mod fixture;
+use fixture::write_cfg;
 
 #[test]
 fn two_args_without_path_errors_and_moves_nothing() {

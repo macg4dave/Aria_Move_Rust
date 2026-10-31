@@ -1,293 +1,78 @@
-//! Application orchestrator.
-//! Loads/merges config, initializes logging, installs signal handlers, validates paths,
-//! resolves the source, and invokes the appropriate move operation.
+//! CLI orchestration; configuration and operations own their policies.
+use anyhow::{Context, Result};
+use aria_move::{Config, cli::Args, config, move_entry, output as out, shutdown};
+use tracing::{error, info};
 
-use anyhow::Result;
-use aria_move::AriaMoveError;
-use aria_move::output as out;
-use std::sync::{Arc, Mutex};
-use tracing::{debug, error, info};
-
-use aria_move::config::xml::load_config_from_xml;
-use aria_move::config::{LoadResult, load_or_init, validate_and_normalize};
-use aria_move::{Config, LogLevel, default_config_path, move_entry, resolve_source_path, shutdown};
-
-use crate::logging::init_tracing;
-use aria_move::cli::Args;
-
-/// Run the CLI application.
 pub fn run(args: Args) -> Result<()> {
-    // Apply --config early: highest precedence, before template creation or print-config logic
-    if let Some(p) = args.config_path.as_ref() {
-        unsafe { std::env::set_var("ARIA_MOVE_CONFIG", p); }
-    }
-
-    // Handle --print-config before logging init
+    let config_path = match args.config_path.as_deref() {
+        Some(path) => config::paths::resolve_config_path(path)?,
+        None => config::default_config_path()?,
+    };
     if args.print_config {
-        if let Ok(cfg_env) = std::env::var("ARIA_MOVE_CONFIG") {
-            out::print_info(&format!(
-                "Using ARIA_MOVE_CONFIG (explicit):\n  {}\n",
-                cfg_env
+        out::print_info(&format!("Config path:\n  {}", config_path.display()));
+        return Ok(());
+    }
+    let loaded = match std::fs::symlink_metadata(&config_path) {
+        Ok(_) => config::xml::load_for_app(&config_path)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if args.dry_run {
+                anyhow::bail!(
+                    "Config missing: {}; dry-run will not create a template",
+                    config_path.display()
+                );
+            }
+            config::xml::create_template_config(&config_path)?;
+            out::print_success(&format!(
+                "A template aria_move config was written to: {}",
+                config_path.display()
             ));
-            out::print_info("To override, unset ARIA_MOVE_CONFIG or set it to another file.");
+            out::print_info("Edit download_base and completed_base, then re-run this command.");
             return Ok(());
         }
-        match default_config_path() {
-            Ok(p) => {
-                out::print_info(&format!(
-                    "Default aria_move config path:\n  {}\n",
-                    p.display()
-                ));
-                if p.exists() {
-                    out::print_info("A config file already exists at that location.");
-                } else {
-                    out::print_info(
-                        "No config file exists there yet. Run without --print-config to create a template.",
-                    );
-                }
-            }
-            Err(e) => {
-                out::print_error(&format!("Could not determine a default config path: {e}"));
-            }
-        }
-        return Ok(());
-    }
-
-    // Create template config if none exists at resolved path (before logging init)
-    if let LoadResult::CreatedTemplate(path) = load_or_init()? {
-        out::print_success(&format!(
-            "A template aria_move config was written to: {}",
-            path.display()
-        ));
-        out::print_info(
-            "Edit the file to set `download_base`, `completed_base` and optionally `log_level` and `log_file`. Example:\n\n<config>\n  <download_base>/path/to/incoming</download_base>\n  <completed_base>/path/to/completed</completed_base>\n  <log_level>normal</log_level>\n  <log_file>/path/to/aria_move.log</log_file>\n</config>\n",
-        );
-        out::print_info(
-            "Then re-run this command. To use a different location pass --config or set ARIA_MOVE_CONFIG.",
-        );
-        return Ok(());
-    }
-
-    // Build config (may read XML). CLI args override config values.
-    let mut cfg = Config::default();
-
-    // Prefer config file values unless CLI overrides them.
-    if let Some((db, cb, lvl, lf, preserve_metadata, preserve_permissions, disable_locks)) =
-        load_config_from_xml()
+        Err(e) => return Err(e).context("read config path"),
+    };
+    let mut cfg = loaded.config;
+    if let Some(parent) = config_path.parent()
+        && !(cfg!(unix) && parent.starts_with("/etc"))
     {
-        if args.download_base.is_none() {
-            cfg.download_base = db;
-        }
-        if args.completed_base.is_none() {
-            cfg.completed_base = cb;
-        }
-        if args.log_level.is_none()
-            && let Some(l) = lvl
-        {
-            cfg.log_level = l;
-        }
-        if let Some(xml_log) = lf {
-            cfg.log_file = Some(xml_log);
-        }
-        cfg.preserve_metadata = preserve_metadata;
-        // Only set permissions flag if full metadata not requested (XML semantics mirror CLI precedence)
-        if !cfg.preserve_metadata {
-            cfg.preserve_permissions = preserve_permissions;
-        }
-        cfg.disable_locks = disable_locks;
+        cfg.log_file = loaded
+            .explicit_log
+            .clone()
+            .or_else(|| Some(parent.join("aria_move.log")));
     }
-
-    // Apply CLI overrides (CLI wins)
-    if let Some(db) = args.download_base.as_ref() {
-        cfg.download_base = db.clone();
+    args.apply_overrides(&mut cfg);
+    cfg.disable_locks |= std::env::var_os("ARIA_MOVE_DISABLE_LOCKS").is_some_and(|v| v == "1");
+    // A dry run permits only an explicitly configured log, never a default log.
+    let log_path = if cfg.dry_run {
+        loaded.explicit_log
+    } else {
+        cfg.log_file.clone()
+    };
+    let _guard = crate::logging::init_tracing(&cfg.log_level, log_path.as_deref(), args.json)?;
+    ctrlc::set_handler(shutdown::request).context("install signal handler")?;
+    let result = execute(&args, &mut cfg);
+    if let Err(e) = &result {
+        let code = e
+            .downcast_ref::<aria_move::AriaMoveError>()
+            .map_or("io_error", |e| e.code());
+        error!(code, error = ?e, "Move failed");
     }
-    if let Some(cb) = args.completed_base.as_ref() {
-        cfg.completed_base = cb.clone();
-    }
-    if let Some(lvl_str) = args.log_level.as_ref() {
-        if let Some(parsed) = LogLevel::parse(lvl_str) {
-            cfg.log_level = parsed;
-        }
-    } else if args.debug {
-        cfg.log_level = LogLevel::Debug;
-    }
-    if args.preserve_metadata {
-        cfg.preserve_metadata = true;
-    }
-    if args.preserve_permissions && !cfg.preserve_metadata {
-        cfg.preserve_permissions = true;
-    }
-    if args.dry_run {
-        cfg.dry_run = true;
-    }
-
-    // Initialize logging and capture the guard so we can drop it on signal
-    let guard_opt: Option<tracing_appender::non_blocking::WorkerGuard> =
-        init_tracing(&cfg.log_level, cfg.log_file.as_deref(), args.json).map_err(|e| {
-            out::print_error(&format!("Failed to initialize logging: {}", e));
-            e
-        })?;
-
-    // Guard needs to be dropped on SIGINT to flush logs
-    let guard_slot = Arc::new(Mutex::new(guard_opt));
-    {
-        let guard_slot = Arc::clone(&guard_slot);
-        ctrlc::set_handler(move || {
-            shutdown::request();
-            out::print_warn("Received interrupt; shutting down gracefully...");
-            if let Ok(mut g) = guard_slot.lock() {
-                let _ = g.take(); // drop guard here to flush tracing_appender
-            }
-        })
-        .expect("failed to install signal handler");
-    }
-
-    if shutdown::is_requested() {
-        return Ok(());
-    }
-
-    debug!("Starting aria_move: {:?}", args);
-
-    // Main run (so we can drop guard after)
-    let result = (|| -> Result<()> {
-        // Ensure required directories exist and canonicalize paths
-        validate_and_normalize(&mut cfg)?;
-
-        // Headless-friendly: reconcile orphan temps and partial dirs before doing any work
-        if let Err(e) = crate::resume::reconcile(&cfg) {
-            // Non-fatal: log and continue. This cleanup is best-effort.
-            tracing::warn!(error = %e, "resume reconcile step failed; proceeding");
-        }
-        let maybe_src_owned = args.resolved_source();
-        // If user explicitly provided a path, allow directories directly, else resolve files.
-        // For files under download_base that belong to a multi-file directory (immediate child
-        // of download_base), promote the selection to that directory so the entire folder moves.
-        let src_result: Result<std::path::PathBuf> = if let Some(p) = maybe_src_owned.as_deref() {
-            match std::fs::symlink_metadata(p) {
-                Ok(meta) if meta.file_type().is_dir() => Ok(p.to_path_buf()),
-                Ok(meta) if meta.file_type().is_file() => {
-                    // Heuristic: if path is within download_base, move the top-level folder under download_base
-                    // instead of a single file (common for multi-file downloads).
-                    let abs_p = dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-                    let base = dunce::canonicalize(&cfg.download_base).unwrap_or_else(|_| cfg.download_base.clone());
-                    if abs_p.starts_with(&base) {
-                        // Find the immediate child under base
-                        let rel = abs_p.strip_prefix(&base).unwrap_or(&abs_p);
-                        if let Some(first) = rel.components().next() {
-                            use std::path::Component;
-                            if let Component::Normal(name) = first {
-                                let candidate = base.join(name);
-                                if candidate.is_dir() && candidate != abs_p {
-                                    // Promote to directory move
-                                    Ok(candidate)
-                                } else {
-                                    // Fall back to moving the file itself
-                                    Ok(p.to_path_buf())
-                                }
-                            } else {
-                                Ok(p.to_path_buf())
-                            }
-                        } else {
-                            Ok(p.to_path_buf())
-                        }
-                    } else {
-                        Ok(p.to_path_buf())
-                    }
-                }
-                _ => resolve_source_path(&cfg, Some(p)),
-            }
-        } else {
-            resolve_source_path(&cfg, None)
-        };
-
-        let src = match src_result {
-            Ok(p) => p,
-            Err(e) => {
-                if let Some(am) = e.downcast_ref::<AriaMoveError>() {
-                    let code = am.code();
-                    match am {
-                        AriaMoveError::ProvidedNotFile(path) => {
-                            error!(code, kind = "provided_not_file", path = %path.display(), "Source path is not a regular file")
-                        }
-                        AriaMoveError::Disappeared(path) => {
-                            error!(code, kind = "disappeared", path = %path.display(), "Resolved path disappeared before use")
-                        }
-                        AriaMoveError::NoneFound(base) => {
-                            error!(code, kind = "none_found", base = %base.display(), "No candidate file found under base")
-                        }
-                        AriaMoveError::BaseInvalid(base) => {
-                            error!(code, kind = "base_invalid", base = %base.display(), "Download base invalid or not a directory")
-                        }
-                        _ => {
-                            error!(code, kind = "resolve_error", error = ?am, "Failed to resolve a source path")
-                        }
-                    }
-                } else {
-                    error!(error = ?e, "Failed to resolve a source path");
-                }
-                return Err(e);
-            }
-        };
-        match move_entry(&cfg, &src) {
-            Ok(dest) => {
-                if cfg.dry_run {
-                    out::print_info(&format!(
-                        "Dry-run: would move '{}' -> '{}'",
-                        src.display(),
-                        dest.display()
-                    ));
-                }
-                info!(source = %src.display(), dest = %dest.display(), "Move completed");
-                Ok(())
-            }
-            Err(e) => {
-                if let Some(am) = e.downcast_ref::<AriaMoveError>() {
-                    let code = am.code();
-                    match am {
-                        AriaMoveError::SourceNotFound(path) => {
-                            error!(code, kind = "source_not_found", path = %path.display(), "Move failed")
-                        }
-                        AriaMoveError::PermissionDenied { path, context } => {
-                            error!(code, kind = "permission_denied", path = %path.display(), %context, "Move failed")
-                        }
-                        AriaMoveError::InsufficientSpace {
-                            required,
-                            available,
-                            dest,
-                        } => {
-                            error!(code, kind = "insufficient_space", required = *required, available = *available, dest = %dest.display(), "Move failed")
-                        }
-                        AriaMoveError::Interrupted => {
-                            error!(code, kind = "interrupted", "Move aborted by user")
-                        }
-                        AriaMoveError::ProvidedNotFile(path) => {
-                            error!(code, kind = "provided_not_file", path = %path.display(), "Move failed")
-                        }
-                        AriaMoveError::Disappeared(path) => {
-                            error!(code, kind = "disappeared", path = %path.display(), "Move failed")
-                        }
-                        AriaMoveError::NoneFound(base) => {
-                            error!(code, kind = "none_found", base = %base.display(), "Move failed")
-                        }
-                        AriaMoveError::BaseInvalid(base) => {
-                            error!(code, kind = "base_invalid", base = %base.display(), "Move failed")
-                        }
-                        _ => {
-                            error!(code, kind = "move_error", error = ?am, "Move failed")
-                        }
-                    }
-                } else {
-                    error!(error = ?e, "Move failed");
-                }
-                Err(e)
-            }
-        }
-    })();
-
-    // Ensure logs are flushed before exit
-    if let Ok(mut g) = guard_slot.lock() {
-        let _ = g.take();
-    }
-
     result
+}
+
+fn execute(args: &Args, cfg: &mut Config) -> Result<()> {
+    shutdown::check()?;
+    config::validate_and_normalize(cfg)?;
+    let source = args.resolved_source();
+    let src = aria_move::fs_ops::resolve_download_source(cfg, source.as_deref())?;
+    let dest = move_entry(cfg, &src)?;
+    if cfg.dry_run && !args.json {
+        out::print_info(&format!(
+            "Dry-run: would move '{}' -> '{}'",
+            src.display(),
+            dest.display()
+        ));
+    }
+    info!(source = %src.display(), dest = %dest.display(), dry_run = cfg.dry_run, "Move completed");
+    Ok(())
 }

@@ -2,29 +2,21 @@
 //! Creates two temp config files with different completed_base values and ensures
 //! the CLI picks the path passed via --config even when ARIA_MOVE_CONFIG points elsewhere.
 
-use assert_cmd::cargo;
 use assert_cmd::assert::OutputAssertExt; // bring .assert() into scope
+use assert_cmd::cargo;
 use std::fs;
 use tempfile::tempdir;
 
 // Minimal XML template with differing completed_base so we can detect which was used.
-fn write_cfg(path: &std::path::Path, download: &std::path::Path, completed: &std::path::Path) {
-    let xml = format!(r#"<config>
-  <download_base>{}</download_base>
-  <completed_base>{}</completed_base>
-  <log_level>quiet</log_level>
-  <log_file></log_file>
-  <preserve_metadata>false</preserve_metadata>
-  <preserve_permissions>false</preserve_permissions>
-</config>"#, download.display(), completed.display());
-    fs::write(path, xml).unwrap();
-}
+#[path = "common/config_fixture.rs"]
+mod fixture;
+use fixture::write_cfg;
 
 #[test]
 fn config_flag_overrides_env() {
     let td = tempdir().unwrap();
     // Canonicalize base to avoid symlink ancestors like /var -> /private/var on macOS.
-    let base = fs::canonicalize(td.path()).unwrap();
+    let base = dunce::canonicalize(td.path()).unwrap();
     let env_cfg = base.join("env_config.xml");
     let flag_cfg = base.join("flag_config.xml");
 
@@ -45,7 +37,7 @@ fn config_flag_overrides_env() {
     fs::write(&source, b"data").unwrap();
 
     let bin = cargo::cargo_bin!("aria_move");
-    let mut cmd = std::process::Command::new(&bin);
+    let mut cmd = std::process::Command::new(bin);
     // Set ARIA_MOVE_CONFIG to env_cfg, but pass --config flag pointing to flag_cfg.
     cmd.env("ARIA_MOVE_CONFIG", &env_cfg)
         .arg("--config")
@@ -56,6 +48,21 @@ fn config_flag_overrides_env() {
     // Expect output to mention /tmp/completedB (from flag_cfg) not completedA.
     let output = cmd.assert().success().get_output().stdout.clone();
     let text = String::from_utf8_lossy(&output);
-    assert!(text.contains(&com_b.display().to_string()), "stdout should reference flag config completed_base");
-    assert!(!text.contains(&com_a.display().to_string()), "stdout should not reference env config completed_base");
+    assert!(
+        text.contains(&com_b.display().to_string()),
+        "stdout should reference flag config completed_base"
+    );
+    assert!(source.exists(), "dry-run retains source");
+    assert!(
+        fs::read_dir(&com_a).unwrap().next().is_none(),
+        "env destination untouched"
+    );
+    assert!(
+        fs::read_dir(&com_b).unwrap().next().is_none(),
+        "flag destination untouched by dry-run"
+    );
+    assert!(
+        !text.contains(&com_a.display().to_string()),
+        "stdout should not reference env config completed_base"
+    );
 }

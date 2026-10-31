@@ -1,249 +1,150 @@
-//! Advisory move lock.
-//! Uses a sidecar lock file to ensure only one process operates in a directory at a time.
-//!
-//! Design:
-//! - We lock by opening/holding a file `.aria_move.dir.lock` inside the target directory.
-//! - Unix: use flock(LOCK_EX) on the file descriptor (blocks until acquired).
-//! - Windows: open the file without sharing (exclusive); retry on sharing violations.
-//!
-//! Notes:
-//! - The lock is released when the DirLock guard is dropped.
-//! - This module returns io::Result to keep low-level errors precise.
-//!
-//! Callers typically use:
-//!   - acquire_move_lock(src_path)       // serialize per-source (parent dir)
-//!   - acquire_dir_lock(destination_dir) // serialize finalization into destination
-
-#[cfg(unix)]
+//! Cancellable directory locks. Lock failures never silently disable protection.
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
-use tracing::trace;
-#[cfg(windows)]
-use tracing::warn;
+use std::time::Duration;
 
-#[cfg(unix)]
-use std::os::fd::AsRawFd;
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
-
-#[cfg(windows)]
-use windows_sys::Win32::{
-    Foundation::CloseHandle,
-    Storage::FileSystem::{
-        CreateFileW, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_NORMAL, OPEN_ALWAYS, SetFileAttributesW,
-    },
-};
-
-#[cfg(windows)]
-const GENERIC_READ: u32 = 0x8000_0000;
-#[cfg(windows)]
-const GENERIC_WRITE: u32 = 0x4000_0000;
-
-/// RAII guard held while a directory-level lock is active.
-/// Public for integration tests / advanced callers; stability not guaranteed.
+/// An exclusive directory lock, released when the guard is dropped.
 pub struct DirLock {
-    #[cfg(unix)]
-    file: File, // on Unix we lock the directory fd directly
-    #[cfg(windows)]
-    handle: isize, // HANDLE for the hidden lock file
-    _path: PathBuf, // for logs; on Windows this is the lock file path, on Unix the directory path
+    _file: File,
 }
 
-impl Drop for DirLock {
-    fn drop(&mut self) {
-        #[cfg(unix)]
-        {
-            // Unlock by closing; flock releases on fd close. Best-effort: ignore errors.
-            let _ = unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
-        }
-        #[cfg(windows)]
-        unsafe {
-            if self.handle != 0 {
-                let _ = CloseHandle(self.handle as _);
-            }
-        }
-        // On Windows, we use a hidden on-disk lock file — try to remove it on drop.
-        // On Unix, we flock the directory fd directly and there is no lock file.
-        #[cfg(windows)]
-        {
-            let _ = std::fs::remove_file(&self._path);
-        }
-    }
-}
-
-fn lock_file_path(dir: &Path) -> PathBuf {
-    dir.join(".aria_move.dir.lock")
-}
-
-/// Acquire an exclusive lock for `dir` by opening/locking a sidecar lock file.
-/// Blocks until acquired. Returns a guard that releases on drop.
-/// Blocking acquire of a directory lock. Waits until the lock is available.
+/// Wait for a directory lock, checking cancellation between nonblocking attempts.
 pub fn acquire_dir_lock(dir: &Path) -> io::Result<DirLock> {
-    let start = Instant::now();
-
-    #[cfg(unix)]
-    {
-        // Open the directory itself and apply an advisory flock on its fd.
-        // This avoids creating any files and reduces permission requirements.
-        let f = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_CLOEXEC | libc::O_DIRECTORY)
-            .open(dir)?;
-
-        // Block until an exclusive lock is acquired.
-        let rc = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) };
-        if rc != 0 {
-            return Err(io::Error::last_os_error());
+    tracing::debug!(path = %dir.display(), "Waiting for directory lock");
+    loop {
+        if crate::shutdown::is_requested() {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                crate::AriaMoveError::Interrupted,
+            ));
         }
-        let waited = start.elapsed();
-        if waited.is_zero() {
-            trace!(path = %dir.display(), "lock acquired immediately");
-        } else {
-            trace!(path = %dir.display(), waited_ms = waited.as_millis() as u64, "lock acquired after wait");
+        if let Some(lock) = try_acquire_dir_lock(dir)? {
+            return Ok(lock);
         }
-        Ok(DirLock {
-            file: f,
-            _path: dir.to_path_buf(),
-        })
-    }
-
-    #[cfg(windows)]
-    {
-        let lock_path = lock_file_path(dir);
-        use std::iter::once;
-        use std::os::windows::ffi::OsStrExt;
-        use std::thread::sleep;
-        use std::time::Duration;
-
-        // Convert Path -> wide string (null-terminated)
-        let wide: Vec<u16> = lock_path.as_os_str().encode_wide().chain(once(0)).collect();
-
-        let mut attempts: u32 = 0;
-        loop {
-            let handle = unsafe {
-                CreateFileW(
-                    wide.as_ptr(),
-                    GENERIC_READ | GENERIC_WRITE,
-                    0, // no sharing => exclusive
-                    std::ptr::null_mut(),
-                    OPEN_ALWAYS,
-                    FILE_ATTRIBUTE_NORMAL,
-                    std::ptr::null_mut(),
-                )
-            };
-
-            if handle as isize != -1 {
-                // Ensure the on-disk lock file is hidden so casual dir listings don't show it.
-                let _ = unsafe {
-                    SetFileAttributesW(wide.as_ptr(), FILE_ATTRIBUTE_NORMAL | FILE_ATTRIBUTE_HIDDEN)
-                };
-                let waited = start.elapsed();
-                trace!(path = %lock_path.display(), attempts = attempts, waited_ms = waited.as_millis() as u64, "lock acquired");
-                return Ok(DirLock {
-                    handle: handle as isize,
-                    _path: lock_path.clone(),
-                });
-            }
-
-            let err = io::Error::last_os_error();
-            // ERROR_SHARING_VIOLATION = 32 -> retry until available
-            if let Some(code) = err.raw_os_error() {
-                if code == 32 {
-                    attempts += 1;
-                    if attempts % 10 == 0 {
-                        warn!(path = %lock_path.display(), attempts = attempts, "still waiting for directory lock");
-                    }
-                    sleep(Duration::from_millis(50));
-                    continue;
-                }
-            }
-            // Unexpected error
-            return Err(err);
-        }
+        std::thread::sleep(Duration::from_millis(25));
     }
 }
 
-/// Try to acquire an exclusive lock for `dir` without blocking.
-/// Returns Ok(Some(DirLock)) on success, Ok(None) if another process holds the lock,
-/// or Err on unexpected errors.
-/// Non-blocking attempt to acquire a directory lock.
-/// Returns Ok(None) if lock is currently held elsewhere.
+/// Attempt an exclusive lock without waiting. Unix locks the directory inode;
+/// Windows holds an exclusive, delete-on-close sidecar handle.
 pub fn try_acquire_dir_lock(dir: &Path) -> io::Result<Option<DirLock>> {
-    let start = Instant::now();
-
+    crate::config::paths::reject_symlinks(dir)?;
     #[cfg(unix)]
     {
-        let f = OpenOptions::new()
+        use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
+        let file = OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_CLOEXEC | libc::O_DIRECTORY)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
             .open(dir)?;
-
-        let rc = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-        if rc == 0 {
-            trace!(path = %dir.display(), waited_ms = start.elapsed().as_millis() as u64, "try-lock success");
-            return Ok(Some(DirLock {
-                file: f,
-                _path: dir.to_path_buf(),
-            }));
+        // SAFETY: file owns a valid directory fd. Nonblocking flock has no borrowed pointers.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(Some(DirLock { _file: file }));
         }
-        let err = io::Error::last_os_error();
-        if let Some(code) = err.raw_os_error()
-            && code == libc::EWOULDBLOCK
-        {
-            trace!(path = %dir.display(), "try-lock would block");
-            return Ok(None);
+        let error = io::Error::last_os_error();
+        if error.kind() == io::ErrorKind::WouldBlock {
+            Ok(None)
+        } else {
+            Err(error)
         }
-        Err(err)
     }
-
     #[cfg(windows)]
     {
-        let lock_path = lock_file_path(dir);
-        use std::iter::once;
-        use std::os::windows::ffi::OsStrExt;
-
-        let wide: Vec<u16> = lock_path.as_os_str().encode_wide().chain(once(0)).collect();
-
-        let handle = unsafe {
-            CreateFileW(
-                wide.as_ptr(),
-                GENERIC_READ | GENERIC_WRITE,
-                0,
-                std::ptr::null_mut(),
-                OPEN_ALWAYS,
-                FILE_ATTRIBUTE_NORMAL,
-                std::ptr::null_mut(),
-            )
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ATTRIBUTE_HIDDEN, FILE_FLAG_DELETE_ON_CLOSE, FILE_FLAG_OPEN_REPARSE_POINT,
         };
-        if handle as isize != -1 {
-            // Mark the lock file hidden to avoid cluttering directories.
-            let _ = unsafe {
-                SetFileAttributesW(wide.as_ptr(), FILE_ATTRIBUTE_NORMAL | FILE_ATTRIBUTE_HIDDEN)
-            };
-            trace!(path = %lock_path.display(), waited_ms = start.elapsed().as_millis() as u64, "try-lock success");
-            return Ok(Some(DirLock {
-                handle: handle as isize,
-                _path: lock_path,
-            }));
-        }
-        let err = io::Error::last_os_error();
-        if let Some(code) = err.raw_os_error() {
-            // ERROR_SHARING_VIOLATION => already locked
-            if code == 32 {
-                trace!(path = %lock_path.display(), "try-lock would block");
-                return Ok(None);
+        let path = dir.join(".aria_move.dir.lock");
+        crate::config::paths::reject_symlinks(&path)?;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .access_mode(0x8000_0000 | 0x4000_0000 | 0x0001_0000) // READ | WRITE | DELETE
+            .share_mode(0)
+            .custom_flags(
+                FILE_ATTRIBUTE_HIDDEN | FILE_FLAG_DELETE_ON_CLOSE | FILE_FLAG_OPEN_REPARSE_POINT,
+            )
+            .open(&path);
+        match file {
+            Ok(file) => {
+                if crate::config::paths::is_link(&file.metadata()?) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "lock is a reparse point",
+                    ));
+                }
+                Ok(Some(DirLock { _file: file }))
             }
+            Err(e) if e.raw_os_error() == Some(32) => Ok(None),
+            Err(e) => Err(e),
         }
-        Err(err)
     }
 }
 
-/// Acquire a move lock for `src` by locking its parent directory.
-/// Serializes operations on the same source path.
-/// Acquire a move lock for a source path (locks its parent directory).
+/// Lock the source's parent directory.
 pub fn acquire_move_lock(src: &Path) -> io::Result<DirLock> {
-    let parent = src.parent().unwrap_or_else(|| Path::new("."));
-    acquire_dir_lock(parent)
+    acquire_dir_lock(
+        src.parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new(".")),
+    )
+}
+
+/// Use one deterministic order for all operations, including reversed base pairs.
+/// Deduplication also avoids self-deadlocking when both parents are the same inode.
+pub(super) fn acquire_move_locks(
+    src: &Path,
+    destination: &Path,
+    disabled: bool,
+) -> crate::AMResult<Vec<DirLock>> {
+    if disabled {
+        return Ok(Vec::new());
+    }
+    let parent = src
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut dirs: Vec<PathBuf> = vec![
+        dunce::canonicalize(parent)?,
+        dunce::canonicalize(destination)?,
+    ];
+    dirs.sort();
+    dirs.dedup();
+    let mut locks = Vec::new();
+    for dir in dirs {
+        crate::shutdown::check()?;
+        match acquire_dir_lock(&dir) {
+            Ok(lock) => locks.push(lock),
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {
+                return Err(crate::AriaMoveError::Interrupted.into());
+            }
+            Err(e) => return Err(super::helpers::io_error_with_help("acquire lock", &dir)(e)),
+        }
+    }
+    Ok(locks)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn cancellation_interrupts_a_contended_lock() -> crate::AMResult<()> {
+        let _guard = crate::shutdown::test_guard();
+        let td = tempfile::tempdir()?;
+        let held = acquire_dir_lock(td.path())?;
+        let path = td.path().to_path_buf();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let result = acquire_dir_lock(&path).map(|_| ()).map_err(|e| e.kind());
+            sender.send(result).unwrap();
+        });
+        crate::shutdown::request();
+        let result = receiver.recv_timeout(Duration::from_secs(3));
+        drop(held);
+        worker.join().unwrap();
+        assert_eq!(result?, Err(io::ErrorKind::Interrupted));
+        Ok(())
+    }
 }

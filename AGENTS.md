@@ -3,7 +3,7 @@
 Reusable guidance for Rust libraries, CLIs, and services. Read the manifest,
 toolchain, available build configuration, and nearby code before implementing changes.
 For this repository also follow [PROJECT_RULES.md](PROJECT_RULES.md).
-Planned work belongs in the backlog linked from [ROADMAP.md](ROADMAP.md), not in permanent instructions.
+Planned work belongs in [docs/REFACTORING_BACKLOG.md](docs/REFACTORING_BACKLOG.md), not in permanent instructions.
 
 ## 1. Working approach
 

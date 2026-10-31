@@ -11,13 +11,13 @@
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use tracing::trace;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OnDuplicate {
     /// Use the requested name; caller should skip operation if the path already exists.
     Skip,
-    /// Use the requested name and overwrite if it already exists.
+    /// Return the requested name. This naming policy itself performs no writes;
+    /// move/copy operations still refuse replacement.
     Overwrite,
     /// Pick a unique name by appending " (n)" before the extension.
     RenameWithSuffix,
@@ -52,7 +52,7 @@ pub fn resolve_destination(dst_dir: &Path, name: &OsStr, policy: OnDuplicate) ->
             let ext_os: Option<OsString> = base.extension().map(|e| e.to_os_string());
             let adjusted_base = build_name_with_suffix(&stem_os, ext_os.as_deref(), "");
             let adjusted_candidate = dst_dir.join(&adjusted_base);
-            if !adjusted_candidate.exists() {
+            if adjusted_candidate.symlink_metadata().is_err() {
                 return adjusted_candidate;
             }
             unique_with_numeric_suffix(dst_dir, &adjusted_base)
@@ -78,33 +78,47 @@ fn unique_with_numeric_suffix(dst_dir: &Path, name: &OsStr) -> PathBuf {
 
     // First try the requested name; if free, use it.
     let mut candidate = dst_dir.join(name);
-    if !candidate.exists() {
+    if candidate.symlink_metadata().is_err() {
         return candidate;
     }
 
     // Try "stem (n).ext" for n = 2.. until free.
-    let mut n: u64 = 2;
-    let mut collisions = 0u32;
-    const MAX_TRIES: u64 = 10_000;
-    loop {
+    for n in 2u64.. {
         let suffix = format!(" ({n})");
-        let new_name = build_name_with_suffix(&stem, ext.as_deref(), &suffix);
-
-        candidate = dst_dir.join(&new_name);
-        if !candidate.exists() {
+        candidate = dst_dir.join(build_name_with_suffix(&stem, ext.as_deref(), &suffix));
+        if std::fs::symlink_metadata(&candidate).is_err() {
             return candidate;
         }
-        collisions = collisions.saturating_add(1);
-        if collisions == 3 {
-            trace!(name = ?name, dir = %dst_dir.display(), "duplicate: experiencing multiple collisions, continuing to search unique suffix");
-        }
-        if n >= MAX_TRIES {
-            // Final fallback if the directory is extremely crowded with numbered variants.
-            let final_name = build_name_with_suffix(&stem, ext.as_deref(), " (final)");
-            return dst_dir.join(final_name);
-        }
-        n = n.saturating_add(1);
     }
+    // No unchecked final candidate; a finite directory cannot exhaust u64 names.
+    candidate
+}
+
+/// Keep mover timestamp naming distinct from the public numeric policy while
+/// sharing raw-name budgeting and collision detection.
+pub(crate) fn unique_destination(candidate: &Path) -> PathBuf {
+    if std::fs::symlink_metadata(candidate).is_err() {
+        return candidate.to_path_buf();
+    }
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let pid = std::process::id();
+    let stem = candidate.file_stem().unwrap_or_else(|| OsStr::new("file"));
+    let ext = candidate.extension();
+    for n in 1u64.. {
+        let suffix = if n == 1 {
+            format!("-{millis}-{pid}")
+        } else {
+            format!("-{millis}-{pid}-{n}")
+        };
+        let path = candidate.with_file_name(build_name_with_suffix(stem, ext, &suffix));
+        if std::fs::symlink_metadata(&path).is_err() {
+            return path;
+        }
+    }
+    candidate.to_path_buf() // Native no-replace publication still enforces safety.
 }
 
 // Conservative filename limits (bytes/characters, platform-specific and approximate).
@@ -113,89 +127,62 @@ const MAX_FILENAME_LEN: usize = 240; // leave headroom for legacy MAX_PATH
 #[cfg(not(windows))]
 const MAX_FILENAME_LEN: usize = 255; // typical POSIX/EXT limits
 
-/// Measure the approximate length of an OsStr for filename budgeting.
-#[cfg(unix)]
+/// Measure filesystem filename units without lossy conversion.
 fn name_len_units(s: &OsStr) -> usize {
-    use std::os::unix::ffi::OsStrExt;
-    s.as_bytes().len()
-}
-
-#[cfg(windows)]
-fn name_len_units(s: &OsStr) -> usize {
-    // Best-effort: wide char count via lossy string.
-    s.to_string_lossy().len()
-}
-
-/// Truncate the stem if needed to ensure `stem + suffix + ["." + ext]` fits within MAX_FILENAME_LEN.
-fn build_name_with_suffix(stem: &OsStr, ext: Option<&OsStr>, suffix: &str) -> OsString {
-    // Compute fixed overhead (suffix + optional "." + ext)
-    let mut overhead = name_len_units(OsStr::new(suffix));
-    let mut ext_part = OsString::new();
-    if let Some(e) = ext {
-        overhead = overhead.saturating_add(1 + name_len_units(e)); // dot + ext
-        ext_part.push(".");
-        ext_part.push(e);
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        s.as_bytes().len()
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        s.encode_wide().count()
+    }
+}
 
-    let mut stem_os = stem.to_os_string();
-    let name_len = name_len_units(&stem_os) + overhead;
-    if name_len > MAX_FILENAME_LEN {
-        // Need to shrink stem to fit
-        let budget = MAX_FILENAME_LEN.saturating_sub(overhead);
-        if budget == 0 {
-            // Pathologically small budget; fall back to minimal marker
-            stem_os = OsString::from("f");
-        } else {
-            // Try UTF-8-aware truncation first
-            if let Some(stem_str) = stem.to_str() {
-                let mut acc = String::new();
-                for ch in stem_str.chars() {
-                    acc.push(ch);
-                    if name_len_units(OsStr::new(&acc)) > budget {
-                        acc.pop();
-                        break;
-                    }
-                }
-                if acc.is_empty() {
-                    // Ensure at least one character
-                    acc.push('f');
-                }
-                stem_os = OsString::from(acc);
-            } else {
-                // Fallback: best-effort byte-wise truncation on Unix; on Windows use lossy string
-                #[cfg(unix)]
-                {
-                    use std::os::unix::ffi::{OsStrExt, OsStringExt};
-                    let bytes = stem.as_bytes();
-                    let take = bytes.len().min(budget);
-                    let taken = bytes[..take].to_vec();
-                    stem_os = OsString::from_vec(taken);
-                }
-                #[cfg(windows)]
-                {
-                    let s = stem.to_string_lossy();
-                    let mut acc = String::new();
-                    for ch in s.chars() {
-                        acc.push(ch);
-                        if name_len_units(OsStr::new(&acc)) > budget {
-                            acc.pop();
-                            break;
-                        }
-                    }
-                    if acc.is_empty() {
-                        acc.push('f');
-                    }
-                    stem_os = OsString::from(acc);
-                }
+fn truncate_name(value: &OsStr, budget: usize) -> OsString {
+    if name_len_units(value) <= budget {
+        return value.to_owned();
+    }
+    if let Some(text) = value.to_str() {
+        let mut result = OsString::new();
+        for ch in text.chars() {
+            let mut buffer = [0; 4];
+            let part = OsStr::new(ch.encode_utf8(&mut buffer));
+            if name_len_units(&result) + name_len_units(part) > budget {
+                break;
             }
+            result.push(part);
         }
+        return result;
     }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+        OsString::from_vec(value.as_bytes()[..budget].to_vec())
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        OsString::from_wide(&value.encode_wide().take(budget).collect::<Vec<_>>())
+    }
+}
 
-    let mut new_name = OsString::new();
-    new_name.push(&stem_os);
-    if !suffix.is_empty() {
-        new_name.push(suffix);
+fn build_name_with_suffix(stem: &OsStr, ext: Option<&OsStr>, suffix: &str) -> OsString {
+    let suffix_len = name_len_units(OsStr::new(suffix));
+    // Reserve at least one stem unit, including when an extension alone is overlong.
+    let ext_budget = MAX_FILENAME_LEN.saturating_sub(suffix_len + 2);
+    let ext = ext.map(|e| truncate_name(e, ext_budget));
+    let overhead = suffix_len + ext.as_ref().map_or(0, |e| 1 + name_len_units(e));
+    let mut name = truncate_name(stem, MAX_FILENAME_LEN.saturating_sub(overhead));
+    if name.is_empty() {
+        name.push("f");
     }
-    new_name.push(&ext_part);
-    new_name
+    name.push(suffix);
+    if let Some(ext) = ext {
+        name.push(".");
+        name.push(ext);
+    }
+    name
 }

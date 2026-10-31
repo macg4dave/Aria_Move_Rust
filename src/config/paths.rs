@@ -17,10 +17,6 @@
 //!     2. `dirs::data_dir()` platform directory (`.../aria_move/aria_move.log`)
 //!     3. Platform-specific HOME fallback (Unix: `$HOME/.local/share/aria_move/aria_move.log`; Windows: `%USERPROFILE%/AppData/Local/aria_move/aria_move.log`)
 //!
-//! Potential future enhancements:
-//! - Support XDG overrides (`XDG_CONFIG_HOME`, `XDG_DATA_HOME`).
-//! - Distinguish when `ARIA_MOVE_CONFIG` points to a directory (append `config.xml`).
-
 use anyhow::{Context, Result, anyhow};
 use dirs::{config_dir, data_dir};
 use std::fs;
@@ -41,25 +37,7 @@ fn app_path(mut base: PathBuf, filename: &str) -> PathBuf {
 /// 3) HOME fallback (Linux-style ~/.config)
 pub fn default_config_path() -> Result<PathBuf> {
     if let Some(over) = std::env::var_os("ARIA_MOVE_CONFIG") {
-        let candidate = PathBuf::from(&over);
-        let resolved = if candidate.is_relative() {
-            std::env::current_dir()
-                .context(
-                    "Failed to get current working directory while resolving ARIA_MOVE_CONFIG",
-                )?
-                .join(candidate)
-        } else {
-            candidate
-        };
-        // If the override points to a directory, append config.xml
-        if resolved.is_dir()
-            || resolved
-                .to_string_lossy()
-                .ends_with(std::path::MAIN_SEPARATOR)
-        {
-            return Ok(resolved.join("config.xml"));
-        }
-        return Ok(resolved);
+        return resolve_config_path(Path::new(&over));
     }
 
     // Unix system-wide config: prefer /etc/aria_move/config.xml if it exists.
@@ -100,12 +78,11 @@ pub fn default_config_path() -> Result<PathBuf> {
 /// If that is unavailable, falls back to $HOME/.local/share/aria_move/aria_move.log.
 pub fn default_log_path() -> Result<PathBuf> {
     // 1) Colocate with config, unless the parent is a system directory like /etc (not writable).
-    if let Ok(cfg_path) = default_config_path() {
-        if let Some(parent) = cfg_path.parent() {
-            if !(cfg!(unix) && parent.starts_with("/etc")) {
-                return Ok(parent.join("aria_move.log"));
-            }
-        }
+    if let Ok(cfg_path) = default_config_path()
+        && let Some(parent) = cfg_path.parent()
+        && !(cfg!(unix) && parent.starts_with("/etc"))
+    {
+        return Ok(parent.join("aria_move.log"));
     }
 
     // 2) data_dir fallback
@@ -132,18 +109,114 @@ pub fn default_log_path() -> Result<PathBuf> {
         .join("aria_move.log"))
 }
 
-/// Return true if any existing ancestor of `path` is a symlink.
-/// Non-existent ancestors are skipped safely.
+/// Return true if an existing ancestor is a symlink or Windows reparse point.
+/// Metadata errors other than missing components are propagated.
 pub fn path_has_symlink_ancestor(path: &Path) -> io::Result<bool> {
-    let mut cur = path.parent();
-    while let Some(dir) = cur {
-        if dir.exists() {
-            let meta = fs::symlink_metadata(dir)?;
-            if meta.file_type().is_symlink() {
-                return Ok(true);
-            }
+    for ancestor in path.ancestors().skip(1) {
+        if ancestor.as_os_str().is_empty() {
+            continue;
         }
-        cur = dir.parent();
+        match fs::symlink_metadata(ancestor) {
+            Ok(meta) if is_link(&meta) => return Ok(true),
+            Ok(_) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
     }
     Ok(false)
+}
+
+pub(crate) fn is_link(meta: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        // Include junctions and all reparse-point types, not only symbolic links.
+        meta.file_attributes() & 0x400 != 0
+    }
+    #[cfg(not(windows))]
+    {
+        meta.file_type().is_symlink()
+    }
+}
+
+pub(crate) fn reject_symlinks(path: &Path) -> io::Result<()> {
+    let leaf_is_link = match fs::symlink_metadata(path) {
+        Ok(meta) => is_link(&meta),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+        Err(e) => return Err(e),
+    };
+    if leaf_is_link || path_has_symlink_ancestor(path)? {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("Refusing symlink or reparse point: {}", path.display()),
+        ));
+    }
+    Ok(())
+}
+
+/// Resolve a config override without changing process environment.
+pub fn resolve_config_path(path: &Path) -> Result<PathBuf> {
+    let absolute = std::path::absolute(path).context("resolve config override")?;
+    if absolute.is_dir() {
+        Ok(absolute.join("config.xml"))
+    } else {
+        Ok(absolute)
+    }
+}
+
+/// Normalize a prospective path using its nearest existing ancestor, without writes.
+pub(crate) fn normalize_missing(path: &Path) -> Result<PathBuf> {
+    use std::path::Component;
+    let absolute = std::path::absolute(path)?;
+    let mut normalized = PathBuf::new();
+    for part in absolute.components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            _ => normalized.push(part),
+        }
+    }
+    reject_symlinks(&normalized)?;
+    let mut existing = normalized.as_path();
+    let mut missing = Vec::new();
+    while !existing.try_exists()? {
+        missing.push(
+            existing
+                .file_name()
+                .context("path has no existing ancestor")?,
+        );
+        existing = existing.parent().context("path has no parent")?;
+    }
+    let mut result = dunce::canonicalize(existing)?;
+    for component in missing.into_iter().rev() {
+        result.push(component);
+    }
+    Ok(result)
+}
+
+/// Create only missing directories. Existing directory permissions are never changed.
+pub(crate) fn create_directory(path: &Path) -> io::Result<()> {
+    reject_symlinks(path)?;
+    if path.is_dir() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        create_directory(parent)?;
+    }
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    #[cfg(windows)]
+    let _ = &mut builder;
+    match builder.create(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists && path.is_dir() => {}
+        Err(e) => return Err(e),
+    }
+    reject_symlinks(path)
 }

@@ -26,14 +26,14 @@ if ! command -v cross >/dev/null 2>&1; then
 fi
 
 if [ "$RELEASE" = true ]; then
-  cross build --target "$TARGET" --release "${EXTRA_ARGS[@]}"
+  cross build --locked --target "$TARGET" --release "${EXTRA_ARGS[@]}"
 else
-  cross build --target "$TARGET" "${EXTRA_ARGS[@]}"
+  cross build --locked --target "$TARGET" "${EXTRA_ARGS[@]}"
 fi
 
 echo "Built target: $TARGET"
 if [ "$RELEASE" = true ]; then
-  echo "Binary: target/$TARGET/release/$(basename $(pwd))"
+  echo "Binary: target/$TARGET/release/aria_move"
 else
-  echo "Binary: target/$TARGET/debug/$(basename $(pwd))"
+  echo "Binary: target/$TARGET/debug/aria_move"
 fi

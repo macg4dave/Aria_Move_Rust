@@ -1,6 +1,6 @@
 #![cfg(unix)]
 
-use aria_move::{move_entry, Config};
+use aria_move::{Config, move_entry};
 use std::fs;
 use tempfile::tempdir;
 
@@ -20,12 +20,18 @@ fn root_cannot_move_download_base_itself() {
     fs::create_dir_all(&download_base).unwrap();
     fs::create_dir_all(&completed_base).unwrap();
 
-    let mut cfg = Config::default();
-    cfg.download_base = download_base.clone();
-    cfg.completed_base = completed_base;
+    let cfg = Config {
+        download_base: download_base.clone(),
+        completed_base,
+        ..Config::default()
+    };
 
     // Try to move the base directory itself (should be refused)
     let err = move_entry(&cfg, &download_base).expect_err("expected refusal moving base directory");
     let msg = format!("{err}");
-    assert!(msg.to_ascii_lowercase().contains("refusing") || msg.to_ascii_lowercase().contains("download base"), "unexpected error: {msg}");
+    assert!(
+        msg.to_ascii_lowercase().contains("refusing")
+            || msg.to_ascii_lowercase().contains("download base"),
+        "unexpected error: {msg}"
+    );
 }

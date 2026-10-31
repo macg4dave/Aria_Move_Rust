@@ -10,7 +10,6 @@
 //!   // in functions returning io::Result<_>
 //!   File::open(p).map_err(io_error_with_help_io("open file", p))?;
 
-use anyhow::anyhow;
 use std::io;
 use std::path::Path;
 
@@ -112,7 +111,10 @@ pub fn io_error_with_help<'a>(
     op: &'a str,
     path: &'a Path,
 ) -> impl FnOnce(io::Error) -> anyhow::Error + 'a {
-    move |e: io::Error| anyhow!(build_message(op, path, &e))
+    move |e: io::Error| {
+        let message = build_message(op, path, &e);
+        anyhow::Error::new(e).context(message)
+    }
 }
 
 /// Adapter for io::Result code (when the surrounding function returns io::Result).
@@ -122,5 +124,24 @@ pub fn io_error_with_help_io<'a>(
     op: &'a str,
     path: &'a Path,
 ) -> impl FnOnce(io::Error) -> io::Error + 'a {
-    move |e: io::Error| io::Error::new(e.kind(), build_message(op, path, &e))
+    move |e: io::Error| {
+        let message = build_message(op, path, &e);
+        io::Error::new(e.kind(), IoContext { message, source: e })
+    }
+}
+
+#[derive(Debug)]
+struct IoContext {
+    message: String,
+    source: io::Error,
+}
+impl std::fmt::Display for IoContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+impl std::error::Error for IoContext {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
 }

@@ -3,17 +3,8 @@
 #[cfg(windows)]
 mod windows;
 
-#[cfg(target_os = "macos")]
-mod macos;
-
-#[cfg(any(unix, target_os = "macos"))]
-pub(crate) mod temp;
-
-#[cfg(any(unix, target_os = "macos"))]
-mod common_unix;
-
-// Unix but not macOS (e.g., Linux)
-#[cfg(all(unix, not(target_os = "macos")))]
+// One Unix adapter shared by Linux and macOS.
+#[cfg(unix)]
 mod unix;
 
 #[cfg(windows)]
@@ -22,14 +13,11 @@ pub use windows::{
     set_file_mode_0600, write_config_secure_new_0600,
 };
 
-#[cfg(target_os = "macos")]
-pub use macos::{
-    check_disk_space, open_log_file_secure_append, set_dir_mode_0700, set_file_mode_0600,
-    write_config_secure_new_0600,
-};
-
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(unix)]
 pub use unix::{
     check_disk_space, open_log_file_secure_append, set_dir_mode_0700, set_file_mode_0600,
     write_config_secure_new_0600,
 };
+
+mod filesystem;
+pub(crate) use filesystem::{open_directory, open_regular_read, rename_noreplace, sync_directory};

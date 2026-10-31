@@ -3,19 +3,9 @@ use std::fs;
 use std::process::Command;
 use tempfile::tempdir;
 
-fn write_cfg(path: &std::path::Path, download: &std::path::Path, completed: &std::path::Path) {
-    let xml = format!(
-        r#"<config>
-  <download_base>{}</download_base>
-  <completed_base>{}</completed_base>
-  <log_level>quiet</log_level>
-  <preserve_metadata>false</preserve_metadata>
-</config>"#,
-        download.display(),
-        completed.display()
-    );
-    fs::write(path, xml).unwrap();
-}
+#[path = "common/config_fixture.rs"]
+mod fixture;
+use fixture::write_cfg;
 
 #[test]
 fn passing_file_under_base_moves_entire_top_folder() {
@@ -47,7 +37,11 @@ fn passing_file_under_base_moves_entire_top_folder() {
         .output()
         .expect("spawn binary");
 
-    assert!(out.status.success(), "expected success; stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "expected success; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let dest_dir = completed.join("rootname");
     assert!(dest_dir.exists());

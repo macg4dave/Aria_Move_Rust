@@ -26,7 +26,7 @@ mod tests {
     }
 
     #[test]
-    fn rename_over_existing_overwrites() {
+    fn rename_over_existing_is_refused() {
         let td = tempdir().unwrap();
         let dir = td.path().join("d");
         fs::create_dir_all(&dir).unwrap();
@@ -34,11 +34,8 @@ mod tests {
         fs::write(&src, "from-src").unwrap();
         let dst = dir.join("file.txt");
         fs::write(&dst, "old").unwrap();
-        // On Unix, rename overwrites; function should succeed and dst reflect new content
-        let out = try_atomic_move(&src, &dst).unwrap();
-        assert_eq!(out, MoveOutcome::Renamed);
-        assert!(!src.exists());
-        let s = fs::read_to_string(&dst).unwrap();
-        assert_eq!(s, "from-src");
+        assert!(try_atomic_move(&src, &dst).is_err());
+        assert_eq!(fs::read_to_string(&src).unwrap(), "from-src");
+        assert_eq!(fs::read_to_string(&dst).unwrap(), "old");
     }
 }

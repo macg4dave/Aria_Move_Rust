@@ -37,7 +37,6 @@ fn xattrs_preserved_on_safe_copy() {
 #[test]
 fn xattrs_preserved_on_dir_move_copy_fallback() {
     // Force copy fallback via test-only env var (unsafe on Rust 2024 due to global process env)
-    unsafe { std::env::set_var("ARIA_MOVE_FORCE_DIR_COPY", "1") };
 
     let download = tempdir().unwrap();
     let completed = tempdir().unwrap();

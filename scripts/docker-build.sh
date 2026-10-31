@@ -8,7 +8,7 @@ set -euo pipefail
 # Usage: ./scripts/docker-build.sh [--deb]
 
 ROOT=$(pwd)
-IMAGE_TAG="aria_move_build:1.76-bullseye"
+IMAGE_TAG="aria_move_build:1.99-bookworm"
 DOCKERFILE="docker/Dockerfile.build"
 DEB_OUTPUT_DIR="$ROOT/target/debian"
 

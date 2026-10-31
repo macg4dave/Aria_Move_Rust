@@ -1,272 +1,239 @@
-//! Directory move implementation.
-//! Strategy:
-//! - Try atomic rename of the whole directory first (fast path).
-//! - On failure (e.g., EXDEV), pre-check disk space, then copy the tree and remove the source.
-//!   Concurrency:
-//! - Per-source move lock to avoid concurrent claims on the same source.
-//! - Per-destination-base lock to serialize finalization into the completed_base.
-
-use anyhow::{Context, Result, anyhow, bail};
+//! Directory lifecycle. A fallback is published only after a complete verified tree.
+use super::atomic::{MoveOutcome, try_atomic_move};
+use super::copy::Snapshot;
+use crate::{Config, shutdown};
+use anyhow::{Context, Result, ensure};
 use rayon::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::{debug, info, warn};
-use walkdir::WalkDir;
 
-use crate::config::types::Config;
-use crate::shutdown;
-use crate::utils::{ensure_not_base, file_is_mutable};
+#[derive(Debug, PartialEq, Eq)]
+struct Entry {
+    relative: PathBuf,
+    directory: bool,
+    snapshot: Snapshot,
+}
 
-use super::io_error_with_help;
-use super::lock::{acquire_dir_lock, acquire_move_lock};
-use super::space;
-
-/// Move directory contents into completed_base/<src_dir_name>.
-/// - Returns the final destination directory path on success.
-/// - Dry-run prints intent and returns the target path.
-pub fn move_dir(config: &Config, src_dir: &Path) -> Result<PathBuf> {
-    if shutdown::is_requested() {
-        bail!("shutdown requested");
-    }
-
-    // Optional: disable locks via env for environments where directory flock returns EACCES.
-    let disable_locks = config.disable_locks
-        || std::env::var("ARIA_MOVE_DISABLE_LOCKS").ok().as_deref() == Some("1");
-    let _src_lock: Option<super::lock::DirLock> = if disable_locks {
-        debug!(src = %src_dir.display(), "locks disabled via config or ARIA_MOVE_DISABLE_LOCKS=1 (source dir)");
-        None
-    } else {
-        match acquire_move_lock(src_dir) {
-            Ok(l) => Some(l),
-            Err(e) => {
-                if e.kind() == std::io::ErrorKind::PermissionDenied {
-                    debug!(error = %e, src = %src_dir.display(), "acquire_move_lock permission denied; proceeding without lock (diagnostic)");
-                    None
-                } else {
-                    return Err(e.into());
-                }
-            }
-        }
-    };
-    ensure_not_base(&config.download_base, src_dir)?;
-
-    // Compute the target path under completed_base.
-    let src_name = src_dir
-        .file_name()
-        .ok_or_else(|| anyhow!("Source directory missing name: {}", src_dir.display()))?;
-    let mut target = config.completed_base.join(src_name);
-    if target.exists() {
-        // Mirror file move behavior: choose a unique destination directory name.
-        target = crate::utils::unique_destination(&target);
-    }
-
-    if config.dry_run {
-        info!(src = %src_dir.display(), dest = %target.display(), "dry-run: would move directory");
-        return Ok(target);
-    }
-
-    // Serialize moves that finalize into the same completed_base to avoid races.
-    let _dst_lock: Option<super::lock::DirLock> = if disable_locks {
-        debug!(dest = %config.completed_base.display(), "locks disabled via config or ARIA_MOVE_DISABLE_LOCKS=1 (dest dir)");
-        None
-    } else {
-        match acquire_dir_lock(&config.completed_base) {
-            Ok(l) => Some(l),
-            Err(e) => {
-                if e.kind() == std::io::ErrorKind::PermissionDenied {
-                    debug!(error = %e, dest = %config.completed_base.display(), "acquire_dir_lock permission denied; proceeding without lock (diagnostic)");
-                    None
-                } else {
-                    return Err(anyhow!(
-                        "acquire lock for '{}': {}",
-                        config.completed_base.display(),
-                        e
-                    ));
-                }
-            }
-        }
-    };
-
-    // Fast path: same-filesystem atomic directory rename.
-    // Optional pre-detect of cross-device (Unix) to skip a failing rename.
-    let mut did_rename = false;
-
-    // In tests, allow forcing the copy fallback to exercise that path.
-    #[cfg(test)]
-    let force_copy = std::env::var("ARIA_MOVE_FORCE_DIR_COPY").ok().as_deref() == Some("1");
-    #[cfg(not(test))]
-    let force_copy = false;
-
-    #[cfg(unix)]
-    let cross_device =
-        if let (Some(src_parent), Some(dst_parent)) = (src_dir.parent(), target.parent()) {
-            use std::os::unix::fs::MetadataExt;
-            if let (Ok(s_meta), Ok(d_meta)) = (fs::metadata(src_parent), fs::metadata(dst_parent)) {
-                s_meta.dev() != d_meta.dev()
-            } else {
-                false
-            }
+fn inventory(root: &Path) -> Result<Vec<Entry>> {
+    let mut entries = Vec::new();
+    for entry in walkdir::WalkDir::new(root).follow_links(false) {
+        shutdown::check()?;
+        let entry = entry.with_context(|| format!("enumerate {}", root.display()))?;
+        crate::config::paths::reject_symlinks(entry.path())?;
+        let meta = entry.metadata()?;
+        ensure!(
+            meta.is_dir() || meta.is_file(),
+            "unsupported tree entry: {}",
+            entry.path().display()
+        );
+        let handle = if meta.is_file() {
+            crate::platform::open_regular_read(entry.path())?
         } else {
-            false
+            crate::platform::open_directory(entry.path())?
         };
-    #[cfg(not(unix))]
-    let cross_device = false;
-
-    if !force_copy && !cross_device {
-        match fs::rename(src_dir, &target) {
-            Ok(()) => {
-                debug!(src = %src_dir.display(), dest = %target.display(), "Renamed directory atomically");
-                // Best-effort fsync of destination parent (and source parent if different) on Unix.
-                #[cfg(unix)]
-                {
-                    if let Some(dst_parent) = target.parent()
-                        && let Err(e) = super::util::fsync_dir(dst_parent)
-                    {
-                        warn!(error = %e, dir = %dst_parent.display(), "best-effort fsync(dst_parent) failed");
-                    }
-                    if let (Some(sp), Some(dp)) = (src_dir.parent(), target.parent())
-                        && sp != dp
-                        && let Err(e) = super::util::fsync_dir(sp)
-                    {
-                        warn!(error = %e, dir = %sp.display(), "best-effort fsync(src_parent) failed");
-                    }
-                }
-                did_rename = true;
-            }
-            Err(e) => {
-                // Proceed to copy fallback; log a short hint.
-                let hint: &str = if let Some(code) = e.raw_os_error() {
-                    #[cfg(unix)]
-                    {
-                        if code == libc::EXDEV {
-                            "cross-filesystem; will copy instead"
-                        } else if code == libc::EACCES || code == libc::EPERM {
-                            "permission denied; check destination perms"
-                        } else {
-                            "falling back to copy"
-                        }
-                    }
-                    #[cfg(not(unix))]
-                    {
-                        if e.kind() == std::io::ErrorKind::PermissionDenied {
-                            "permission denied; check destination perms"
-                        } else {
-                            "falling back to copy"
-                        }
-                    }
-                } else {
-                    "falling back to copy"
-                };
-                warn!(error = %e, hint, "Atomic directory rename failed, using copy fallback");
-            }
-        }
+        entries.push(Entry {
+            relative: entry.path().strip_prefix(root)?.to_path_buf(),
+            directory: meta.is_dir(),
+            snapshot: Snapshot::read(&handle)?,
+        });
     }
-    if did_rename {
-        return Ok(target);
-    }
+    entries.sort_by(|a, b| a.relative.cmp(&b.relative));
+    Ok(entries)
+}
 
-    // Cross-filesystem or other rename failures: fallback to copy.
-    // Before copying, estimate total size and ensure destination has enough free space.
-    let total_bytes = total_bytes_in_tree(src_dir);
-    // Best-effort check; if statting sizes failed we still proceed, but enforce if we have a number.
-    if let Some(required) = total_bytes {
-        space::ensure_space_for_copy(&config.completed_base, required).with_context(|| {
+/// Move a directory, preserving empty directories and rejecting unsupported entries.
+pub fn move_dir(config: &Config, src: &Path) -> Result<PathBuf> {
+    move_dir_impl(config, src, false)
+}
+
+fn move_dir_impl(config: &Config, src: &Path, force_copy: bool) -> Result<PathBuf> {
+    super::entry::validate_source(config, src, true)?;
+    let candidate = config
+        .completed_base
+        .join(src.file_name().context("source directory has no name")?);
+    if config.dry_run {
+        inventory(src)?;
+        return Ok(super::duplicate::unique_destination(&candidate));
+    }
+    crate::config::paths::create_directory(&config.completed_base)?;
+    let _locks =
+        super::lock::acquire_move_locks(src, &config.completed_base, config.disable_locks)?;
+    super::entry::validate_source(config, src, true)?;
+    let entries = inventory(src)?;
+    let dest = super::duplicate::unique_destination(&candidate);
+    if !force_copy && try_atomic_move(src, &dest)? == MoveOutcome::Renamed {
+        return Ok(dest);
+    }
+    copy_tree(config, src, &dest, &entries)
+}
+
+fn copy_tree(config: &Config, src: &Path, dest: &Path, entries: &[Entry]) -> Result<PathBuf> {
+    let mut required = 0u64;
+    for entry in entries.iter().filter(|e| !e.directory) {
+        required = required
+            .checked_add(fs::metadata(src.join(&entry.relative))?.len())
+            .context("tree size overflow")?;
+    }
+    super::space::ensure_space_for_copy(&config.completed_base, required)?;
+    let stage = tempfile::Builder::new()
+        .prefix(".aria_move.tree.")
+        .tempdir_in(&config.completed_base)?;
+    for entry in entries.iter().filter(|e| e.directory) {
+        shutdown::check()?;
+        crate::config::paths::create_directory(&stage.path().join(&entry.relative))?;
+    }
+    entries
+        .par_iter()
+        .filter(|entry| !entry.directory)
+        .try_for_each(|entry| -> Result<()> {
+            shutdown::check()?;
+            let source = src.join(&entry.relative);
+            ensure!(
+                !crate::utils::file_is_mutable(&source)?,
+                "File '{}' seems in-use",
+                source.display()
+            );
+            let target = stage.path().join(&entry.relative);
+            let mut file = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(&target)?;
+            let (snapshot, _) = super::copy::copy_to_file(
+                &source,
+                &mut file,
+                config.preserve_metadata,
+                config.preserve_permissions,
+                &target,
+            )?;
+            ensure!(
+                snapshot == entry.snapshot,
+                "source changed since tree enumeration"
+            );
+            Ok(())
+        })?;
+    let after = inventory(src)?;
+    ensure!(after == entries, "source tree changed during copy");
+    // Restore directory metadata after children, deepest first, while still owned.
+    for entry in entries.iter().rev().filter(|e| e.directory) {
+        let source = src.join(&entry.relative);
+        let target = stage.path().join(&entry.relative);
+        super::copy::apply_metadata(
+            &source,
+            &target,
+            &fs::metadata(&source)?,
+            config.preserve_metadata,
+            config.preserve_permissions,
+        )?;
+        crate::platform::sync_directory(&target)?;
+    }
+    shutdown::check()?;
+    crate::platform::rename_noreplace(stage.path(), dest)?;
+    // The old staging path is now absent. Its guard never owns the published name.
+    crate::platform::sync_directory(&config.completed_base)?;
+    ensure!(
+        inventory(src)? == entries,
+        "destination published but source tree changed; retaining source"
+    );
+    // Verify ALL files before deleting ANY. Never recursively delete a source tree:
+    // unexpected new entries must survive, and remove_dir must fail when nonempty.
+    for entry in entries.iter().filter(|e| !e.directory) {
+        super::file_move::verify_source(
+            &src.join(&entry.relative),
+            &dest.join(&entry.relative),
+            &entry.snapshot,
+        )?;
+    }
+    for entry in entries.iter().rev().filter(|e| !e.directory) {
+        shutdown::check()?;
+        let source = src.join(&entry.relative);
+        entry
+            .snapshot
+            .check(&crate::platform::open_regular_read(&source)?)?;
+        fs::remove_file(&source).with_context(|| {
             format!(
-                "insufficient free space to copy '{}' (~{}) into '{}'",
-                src_dir.display(),
-                space::format_bytes(required),
-                config.completed_base.display()
+                "destination published at {}; remove source {}",
+                dest.display(),
+                source.display()
             )
         })?;
     }
-
-    // 1) Create directory structure under target.
-    WalkDir::new(src_dir)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_dir())
-        .try_for_each(|d| -> Result<()> {
-            if let Ok(rel) = d.path().strip_prefix(src_dir) {
-                let new_dir = target.join(rel);
-                fs::create_dir_all(&new_dir)
-                    .map_err(io_error_with_help("create directory", &new_dir))?;
-            }
-            Ok(())
-        })?;
-
-    // 2) Collect files and copy them in parallel.
-    let files: Vec<_> = WalkDir::new(src_dir)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file())
-        .map(|e| e.into_path())
-        .collect();
-
-    let copy_result: Result<()> = files.par_iter().try_for_each(|path| -> Result<()> {
-        // Skip files that appear to be in use to avoid partial copies.
-        if file_is_mutable(path)? {
-            return Err(anyhow!(
-                "File '{}' seems in-use; aborting directory move",
-                path.display()
-            ));
-        }
-
-        let rel = path.strip_prefix(src_dir)?;
-        let dst = target.join(rel);
-
-        if let Some(parent) = dst.parent() {
-            fs::create_dir_all(parent).map_err(io_error_with_help("create directory", parent))?;
-        }
-
-        // Copy file data
-        fs::copy(path, &dst).map_err(io_error_with_help("copy file to destination", &dst))?;
-        // Metadata preservation; apply full or permissions-only per flags (best-effort)
-        if (config.preserve_metadata || config.preserve_permissions)
-            && let Ok(src_meta) = fs::metadata(path)
-        {
-            if config.preserve_metadata {
-                let _ = super::metadata::preserve_metadata(&dst, &src_meta);
-                let _ = super::metadata::preserve_xattrs(path, &dst);
-            } else {
-                let _ = super::metadata::preserve_permissions_only(&dst, &src_meta);
-            }
-        }
-        Ok(())
-    });
-    if let Err(e) = copy_result {
-        // Partial failure cleanup: remove target subtree to avoid half-copied results.
-        let _ = fs::remove_dir_all(&target);
-        return Err(e);
+    for entry in entries.iter().rev().filter(|e| e.directory) {
+        shutdown::check()?;
+        fs::remove_dir(src.join(&entry.relative))
+            .context("destination published; source directory is not empty or cannot be removed")?;
     }
-
-    // 3) Remove the original tree after successful copy.
-    fs::remove_dir_all(src_dir).map_err(io_error_with_help("remove source directory", src_dir))?;
-
-    // Best-effort fsync of the destination directory to persist entries.
-    #[cfg(unix)]
-    if let Err(e) = super::util::fsync_dir(&target) {
-        warn!(error = %e, dir = %target.display(), "best-effort fsync(target) failed");
+    if let Some(parent) = src.parent() {
+        crate::platform::sync_directory(parent)?;
     }
-
-    info!(
-        src = %src_dir.display(),
-        dest = %target.display(),
-        "Copied directory contents and removed source"
-    );
-    Ok(target)
+    Ok(dest.to_path_buf())
 }
 
-/// Estimate total bytes of regular files under `root`.
-/// Returns Some(bytes) on success, or None if any metadata read fails.
-fn total_bytes_in_tree(root: &Path) -> Option<u64> {
-    let mut total: u64 = 0;
-    for entry in WalkDir::new(root).into_iter().filter_map(Result::ok) {
-        if entry.file_type().is_file() {
-            match entry.metadata() {
-                Ok(m) => total = total.saturating_add(m.len()),
-                Err(_) => return None, // give up on precise check; we'll proceed without enforcing
-            }
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn forced_copy_preserves_nested_hidden_empty_and_bytes() -> Result<()> {
+        let _guard = crate::shutdown::test_guard();
+        let td = tempfile::tempdir()?;
+        let incoming = td.path().join("in");
+        let completed = td.path().join("out");
+        let src = incoming.join("tree");
+        fs::create_dir_all(src.join(".hidden/sub dir/empty"))?;
+        fs::create_dir_all(&completed)?;
+        let cfg = Config::new(&incoming, &completed);
+        fs::write(src.join(".hidden/sub dir/data"), b"bytes")?;
+        fs::write(src.join("root"), b"root")?;
+        let dest = move_dir_impl(&cfg, &src, true)?;
+        assert!(!src.exists());
+        assert_eq!(fs::read(dest.join(".hidden/sub dir/data"))?, b"bytes");
+        assert!(dest.join(".hidden/sub dir/empty").is_dir());
+        Ok(())
     }
-    Some(total)
+
+    #[test]
+    fn fallback_failure_keeps_source_and_existing_destination() -> Result<()> {
+        let _guard = crate::shutdown::test_guard();
+        let td = tempfile::tempdir()?;
+        let src = td.path().join("in/tree");
+        let completed = td.path().join("out");
+        fs::create_dir_all(&src)?;
+        fs::create_dir_all(&completed)?;
+        fs::write(src.join("unfinished.part"), b"source")?;
+        let cfg = Config::new(src.parent().unwrap(), &completed);
+        let target = completed.join("tree");
+        fs::create_dir(&target)?;
+        fs::write(target.join("unrelated"), b"keep")?;
+        assert!(move_dir_impl(&cfg, &src, true).is_err());
+        assert_eq!(fs::read(src.join("unfinished.part"))?, b"source");
+        assert_eq!(fs::read(target.join("unrelated"))?, b"keep");
+        assert_eq!(fs::read_dir(&completed)?.count(), 1);
+        Ok(())
+    }
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_tree_is_an_error_and_source_is_preserved() -> Result<()> {
+        let _guard = crate::shutdown::test_guard();
+        use std::os::unix::fs::PermissionsExt;
+        // SAFETY: geteuid has no preconditions and does not change process state.
+        if unsafe { libc::geteuid() } == 0 {
+            return Ok(());
+        }
+        let td = tempfile::tempdir()?;
+        let root = dunce::canonicalize(td.path())?;
+        let src = root.join("incoming/tree");
+        let inaccessible = src.join("private");
+        let completed = root.join("out");
+        fs::create_dir_all(&inaccessible)?;
+        fs::create_dir(&completed)?;
+        fs::write(inaccessible.join("keep"), b"keep")?;
+        fs::set_permissions(&inaccessible, fs::Permissions::from_mode(0o000))?;
+        let cfg = Config::new(src.parent().unwrap(), &completed);
+        let result = move_dir_impl(&cfg, &src, true);
+        fs::set_permissions(&inaccessible, fs::Permissions::from_mode(0o700))?;
+        assert!(result.is_err());
+        assert_eq!(fs::read(inaccessible.join("keep"))?, b"keep");
+        assert!(fs::read_dir(completed)?.next().is_none());
+        Ok(())
+    }
 }

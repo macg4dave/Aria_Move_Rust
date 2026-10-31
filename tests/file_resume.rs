@@ -17,7 +17,7 @@ fn test_resume_temp_path(dest: &Path) -> std::path::PathBuf {
 }
 
 #[test]
-fn resumes_partial_file_copy_and_finalizes() -> Result<(), Box<dyn std::error::Error>> {
+fn stale_partial_is_not_trusted_or_removed_by_move() -> Result<(), Box<dyn std::error::Error>> {
     let download = tempdir()?;
     let completed = tempdir()?;
     let cfg = mk_cfg(download.path(), completed.path());
@@ -39,14 +39,32 @@ fn resumes_partial_file_copy_and_finalizes() -> Result<(), Box<dyn std::error::E
     f.write_all(&content[..half])?;
     f.sync_all()?;
 
-    // Invoke file move; it should resume and finalize rename
+    // The move must use source bytes, leaving unowned legacy artifacts alone.
     let final_dest = aria_move::fs_ops::move_file(&cfg, &src)?;
     assert_eq!(final_dest, dest);
 
+    assert_eq!(fs::read(&tmp)?, content[..half]);
     // Source removed, destination exists and has full content
     assert!(!src.exists());
     let got = fs::read(&dest)?;
     assert_eq!(got, content);
 
+    Ok(())
+}
+
+#[test]
+fn stale_equal_smaller_and_oversized_files_cannot_supply_copy_data() -> anyhow::Result<()> {
+    let td = tempdir()?;
+    let src = td.path().join("source");
+    let dest = td.path().join("destination");
+    fs::write(&src, b"correct")?;
+    let stale = test_resume_temp_path(&dest);
+    for bytes in [&b"bad"[..], &b"invalid"[..], &b"much too large"[..]] {
+        fs::write(&stale, bytes)?;
+        aria_move::safe_copy_and_rename(&src, &dest)?;
+        assert_eq!(fs::read(&dest)?, b"correct");
+        assert_eq!(fs::read(&stale)?, bytes);
+        fs::remove_file(&dest)?;
+    }
     Ok(())
 }

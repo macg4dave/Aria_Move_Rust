@@ -1,11 +1,12 @@
 # aria_move project rules
 
-Read with [AGENTS.md](AGENTS.md). [ROADMAP.md](ROADMAP.md) indexes the authoritative
-[backlog](docs/REFACTORING_BACKLOG.md) and [architecture review](docs/ARCHITECTURE.md).
+Read with [AGENTS.md](AGENTS.md). Current design lives in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); maintenance task status lives in
+[docs/REFACTORING_BACKLOG.md](docs/REFACTORING_BACKLOG.md).
 
 ## Purpose and compatibility
 
-aria_move is a Rust 2024 binary and library on stable Rust. aria2 invokes it as
+aria_move is a Rust 2024 binary and library on stable Rust (minimum 1.99). aria2 invokes it as
 `aria_move <task_id> <num_files> <source_path>` to move completed downloads.
 Preserving user data takes priority over speed and cleanup.
 
@@ -20,7 +21,7 @@ CLI values override XML settings.
 |---|---|
 | src/main.rs | Parse arguments, call app, report failure and exit. |
 | src/app.rs | Config merge, logging/signals, resolution and dispatch. |
-| src/logging.rs, src/resume.rs | Binary-only support. |
+| src/logging.rs | Binary-only tracing setup. |
 | src/cli.rs, src/config/ | CLI and configuration types, XML, paths, validation. |
 | src/fs_ops/ | Move/copy operations with a facade mod.rs. |
 | src/platform/ | OS implementations with consistent exported signatures. |
@@ -43,8 +44,8 @@ wrong, fix it with regression coverage before consolidating callers.
 When replacing an implementation, migrate all internal callers and remove the
 obsolete private implementation, declarations, imports, tests and documentation.
 Retain public compatibility adapters where required; do not leave two independent
-policy implementations. Proposed ownership is documented in the architecture
-review; inspect current code before treating any proposal as implemented.
+policy implementations. Current ownership is documented in the architecture
+reference; inspect current code before changing it.
 
 Resolve configuration/environment once at the application boundary and pass
 settings explicitly. Keep one XML mapping, CLI override policy, filesystem
@@ -55,14 +56,17 @@ framework or wrapper layer to conceal competing implementations.
 ## Filesystem invariants
 
 These are required safety contracts, not a claim that current code satisfies them.
-Known violations and regression work are recorded in the audit and backlog.
+Regression tests must exercise these contracts, including failure paths.
 
-- Try atomic rename first. On cross-device failure copy to a temp path in the
+- Refuse replacement of all existing destinations. Try native exclusive rename first. On cross-device failure copy to a temp path in the
   destination directory, verify completeness and sync, publish by rename, then
   remove the source. Never remove source data before the destination is verified.
 - Preserve collision handling and symlink/ancestor rejection through
   `path_has_symlink_ancestor`.
-- Respect locks and config.disable_locks.
+- Respect locks and config.disable_locks; resolve legacy lock environment only at
+  the application boundary. Never silently proceed after a lock failure.
+- Never infer artifact ownership from a filename or entry count. Leave unknown
+  legacy artifacts untouched; clean up only uniquely owned staging.
 - Dry runs create no directories, locks, temp files or other writes except the
   explicitly configured log file.
 - Walks and chunked copies check shutdown::is_requested() and return
@@ -80,8 +84,8 @@ Run the general gate for Rust changes. On Linux/macOS also run clippy and tests
 with --all-features. Do not use --all-features on Windows: xattr is Unix-only.
 Release targets are Linux x86_64/aarch64, macOS universal and Windows MSVC.
 Mark Unix/Linux-only integration files with appropriate crate-level cfg.
-Inspect effective flags rather than assuming the local lint setting works;
-measured results and command-local strict override are in docs/VALIDATION.md.
+There is no local lint cap. Do not add one; strict clippy must remain blocking.
+Measured results are in docs/VALIDATION.md.
 Keep Cargo changes scoped, use existing dependencies, and run available local
 license/advisory checks for dependency changes. Do not weaken security policy.
 
@@ -90,7 +94,7 @@ license/advisory checks for dependency changes. Do not weaken security policy.
 AGENTS.md owns general Rust practice; this file owns project contracts; CLAUDE.md
 imports those rules. docs/ARCHITECTURE.md records design decisions,
 docs/REFACTORING_BACKLOG.md owns tasks, and docs/VALIDATION.md records dated
-measurements. Keep ROADMAP.md as the entry point. Update affected contracts,
+measurements. Use the backlog as the maintenance entry point. Update affected contracts,
 examples and docs in the same change; avoid copied baselines in agent skills.
 GitHub automation was intentionally removed. Preserve local build, test, lint,
 security and packaging capabilities; do not reintroduce workflows without request.

@@ -3,6 +3,7 @@ use std::io::Write;
 use std::path::Path;
 
 use aria_move::Config;
+#[cfg(unix)]
 use filetime::{FileTime, set_file_mtime}; // both used; keep
 use tempfile::tempdir;
 

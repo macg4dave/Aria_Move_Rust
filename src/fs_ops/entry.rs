@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::debug;
@@ -11,7 +11,7 @@ use super::file_move::move_file;
 
 /// Top-level dispatcher for moving a single path (file or directory).
 /// - Ensures `src` is not the configured download base.
-/// - Stats once and branches based on the file type (avoids double syscalls).
+/// - Dispatches on symlink-aware metadata; movers revalidate under their locks.
 /// - Delegates to file or directory mover and returns the final destination path.
 pub fn move_entry(config: &Config, src: &Path) -> Result<PathBuf> {
     ensure_not_base(&config.download_base, src)?;
@@ -19,9 +19,10 @@ pub fn move_entry(config: &Config, src: &Path) -> Result<PathBuf> {
     // First use symlink_metadata to detect and reject symlinks explicitly.
     let lmeta = fs::symlink_metadata(src).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            anyhow!("Source does not exist: {}", src.display())
+            crate::errors::io_context(src, e)
+                .context(format!("Source does not exist: {}", src.display()))
         } else {
-            e.into()
+            crate::errors::io_context(src, e)
         }
     })?;
 
@@ -44,4 +45,22 @@ pub fn move_entry(config: &Config, src: &Path) -> Result<PathBuf> {
             src.display()
         )
     }
+}
+
+/// Shared checks for direct file/dir APIs as well as the dispatcher.
+pub(super) fn validate_source(config: &Config, src: &Path, directory: bool) -> Result<()> {
+    crate::shutdown::check()?;
+    ensure_not_base(&config.download_base, src)?;
+    crate::config::paths::reject_symlinks(src)?;
+    crate::config::paths::reject_symlinks(&config.completed_base)?;
+    let metadata = fs::symlink_metadata(src).map_err(|e| crate::errors::io_context(src, e))?;
+    if metadata.is_dir() != directory || (!metadata.is_file() && !metadata.is_dir()) {
+        bail!("Source has unexpected type: {}", src.display());
+    }
+    let source = crate::config::paths::normalize_missing(src)?;
+    let destination = crate::config::paths::normalize_missing(&config.completed_base)?;
+    if directory && (destination.starts_with(&source) || source.starts_with(&destination)) {
+        bail!("Source and destination directories must be disjoint");
+    }
+    Ok(())
 }

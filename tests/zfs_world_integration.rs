@@ -28,14 +28,13 @@
 //   - Emits human-friendly diagnostics with prefix [zfs].
 //   - To run: `ARIA_MOVE_RUN_ZFS_TEST=1 cargo test --test zfs_world_integration -- --ignored`
 
-use aria_move::{move_entry, Config};
+use aria_move::{Config, move_entry};
 use std::ffi::CString;
 use std::fs;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
 use std::os::unix::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::SystemTime;
 
 const DEFAULT_ZFS_ROOT: &str = "/mnt/World";
 const ENV_ZFS_ROOT: &str = "ARIA_MOVE_ZFS_ROOT";
@@ -44,13 +43,21 @@ const COMPLETED_DIR_NAME: &str = "completed";
 
 fn maybe_world_mount(root: &str) -> Option<PathBuf> {
     let p = Path::new(root);
-    if p.is_dir() { Some(p.to_path_buf()) } else { None }
+    if p.is_dir() {
+        Some(p.to_path_buf())
+    } else {
+        None
+    }
 }
 
 fn make_cfg(root: &Path) -> Config {
     let download_base = root.join(INCOMING_DIR_NAME);
     let completed_base = root.join(COMPLETED_DIR_NAME);
-    Config { download_base, completed_base, ..Config::default() }
+    Config {
+        download_base,
+        completed_base,
+        ..Config::default()
+    }
 }
 
 fn run_cmd(cmd: &str, args: &[&str]) -> Option<String> {
@@ -77,7 +84,7 @@ fn print_basic_sys_info() {
     }
 }
 
-#[cfg(any(target_os = "linux"))]
+#[cfg(target_os = "linux")]
 fn print_fs_type(path: &Path) {
     unsafe {
         let c = match CString::new(path.as_os_str().as_bytes()) {
@@ -92,14 +99,25 @@ fn print_fs_type(path: &Path) {
             const ZFS_SUPER_MAGIC: u64 = 0x2FC12FC1;
             const EXT4_SUPER_MAGIC: u64 = 0xEF53;
             const BTRFS_SUPER_MAGIC: u64 = 0x9123683E;
-            if ftype == ZFS_SUPER_MAGIC { eprintln!("[zfs] filesystem detected: ZFS"); }
-            if ftype == EXT4_SUPER_MAGIC { eprintln!("[zfs] filesystem detected: ext4"); }
-            if ftype == BTRFS_SUPER_MAGIC { eprintln!("[zfs] filesystem detected: btrfs"); }
+            if ftype == ZFS_SUPER_MAGIC {
+                eprintln!("[zfs] filesystem detected: ZFS");
+            }
+            if ftype == EXT4_SUPER_MAGIC {
+                eprintln!("[zfs] filesystem detected: ext4");
+            }
+            if ftype == BTRFS_SUPER_MAGIC {
+                eprintln!("[zfs] filesystem detected: btrfs");
+            }
         }
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
+#[cfg(any(
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd"
+))]
 fn print_fs_type(path: &Path) {
     unsafe {
         let c = match CString::new(path.as_os_str().as_bytes()) {
@@ -153,7 +171,14 @@ fn print_zfs_info(root: &str) {
 }
 
 #[test]
+#[ignore = "requires explicit opt-in to real storage with ARIA_MOVE_RUN_ZFS_TEST=1"]
 fn zfs_world_create_move_verify() -> io::Result<()> {
+    if std::env::var("ARIA_MOVE_RUN_ZFS_TEST").ok().as_deref() != Some("1") {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "set ARIA_MOVE_RUN_ZFS_TEST=1 to authorize this real-storage test",
+        ));
+    }
     // Determine root path (env override or default); if missing, skip.
     let root_str = std::env::var(ENV_ZFS_ROOT).unwrap_or_else(|_| DEFAULT_ZFS_ROOT.to_string());
     let Some(world) = maybe_world_mount(&root_str) else {
@@ -166,12 +191,11 @@ fn zfs_world_create_move_verify() -> io::Result<()> {
     print_mount_info(&root_str);
     print_zfs_info(&root_str);
 
-    // Unique subtree per test run
-    let pid = std::process::id();
-    let epoch_ms = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_millis();
-    let test_root = world.join(format!("aria_move_test_{}_{}", pid, epoch_ms));
-    fs::create_dir_all(&test_root)?;
-    let cfg = make_cfg(&test_root);
+    // Only the unique, exclusively created temporary subtree belongs to this test.
+    let subtree = tempfile::Builder::new()
+        .prefix("aria_move_test_")
+        .tempdir_in(&world)?;
+    let cfg = make_cfg(subtree.path());
     fs::create_dir_all(&cfg.download_base)?;
     fs::create_dir_all(&cfg.completed_base)?;
 
@@ -188,15 +212,24 @@ fn zfs_world_create_move_verify() -> io::Result<()> {
     eprintln!("[zfs] creating sample file: {}", file_path.display());
     // Move file
     let moved_file = move_entry(&cfg, &file_path).expect("move file across share");
-    assert!(moved_file.exists(), "moved file must exist in completed base");
+    assert!(
+        moved_file.exists(),
+        "moved file must exist in completed base"
+    );
     eprintln!("[zfs] moved file to: {}", moved_file.display());
     let content = fs::read(&moved_file)?;
     assert!(String::from_utf8_lossy(&content).contains("hello zfs"));
 
-    eprintln!("[zfs] creating and moving directory: {}", dir_path.display());
+    eprintln!(
+        "[zfs] creating and moving directory: {}",
+        dir_path.display()
+    );
     // Move directory
     let moved_dir = move_entry(&cfg, &dir_path).expect("move directory across share");
-    assert!(moved_dir.exists() && moved_dir.is_dir(), "moved directory exists");
+    assert!(
+        moved_dir.exists() && moved_dir.is_dir(),
+        "moved directory exists"
+    );
     let nested = moved_dir.join("nested.bin");
     assert!(nested.exists(), "nested file carried over");
     assert_eq!(fs::read(&nested)?.as_slice(), b"12345");
@@ -213,7 +246,6 @@ fn zfs_world_create_move_verify() -> io::Result<()> {
     assert!(!file_path.exists(), "original file path removed");
     assert!(!dir_path.exists(), "original directory path removed");
 
-    // Cleanup test subtree (best-effort)
-    if let Err(e) = fs::remove_dir_all(&test_root) { eprintln!("[zfs] cleanup failed: {}", e); }
+    subtree.close()?;
     Ok(())
 }

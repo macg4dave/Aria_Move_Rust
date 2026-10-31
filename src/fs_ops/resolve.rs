@@ -1,86 +1,85 @@
-//! Resolving the source path.
-//! - If the caller provides a concrete path, use it if it exists and is a regular file OR directory
-//!   (or a symlink that resolves to one of those types).
-//! - For a bare filename, try resolving it under `download_base` with the same rules.
-//! - Otherwise, do not auto-pick; return an error. Auto-selection is out of scope for this program.
-//!
-//! Notes:
-//! - Single-pass walk (no intermediate Vec) for efficiency.
-//! - Re-validates the chosen path before returning to avoid TOCTOU surprises.
-
+//! Explicit source resolution; no automatic download selection.
+use crate::{AriaMoveError, Config};
 use anyhow::Result;
 use std::path::{Path, PathBuf};
-use tracing::{instrument, warn};
 
-use crate::config::types::Config;
-use crate::errors::AriaMoveError;
-
-/// Resolve the source path. If `maybe_path` is Some and exists, that wins.
-/// Otherwise returns an error (auto-pick is out of scope).
-#[instrument(level = "debug", skip(config), fields(base=%config.download_base.display()))]
 pub fn resolve_source_path(config: &Config, maybe_path: Option<&Path>) -> Result<PathBuf> {
-    // 1) Prefer explicitly provided path when it exists.
-    if let Some(p) = maybe_path {
-        // When the caller provided a path explicitly, do NOT fall back to auto-scan.
-        // Be strict and return a precise error so we never move an unintended file.
-        match std::fs::symlink_metadata(p) {
-            Ok(meta) => {
-                let ft = meta.file_type();
-                if ft.is_file() || ft.is_dir() {
-                    return Ok(p.to_path_buf());
-                } else if ft.is_symlink() {
-                    if let Ok(dm) = std::fs::metadata(p)
-                        && (dm.is_file() || dm.is_dir())
-                    {
-                        return Ok(p.to_path_buf());
-                    }
-                    return Err(AriaMoveError::ProvidedNotFile(p.to_path_buf()).into());
-                } else {
-                    return Err(AriaMoveError::ProvidedNotFile(p.to_path_buf()).into());
-                }
-            }
-            Err(e) => {
-                // If the provided argument is a bare filename (no path separators)
-                // and does not exist as given, try resolving it under download_base.
-                if e.kind() == std::io::ErrorKind::NotFound && is_bare_filename(p) {
-                    let candidate = config.download_base.join(p);
-                    match std::fs::symlink_metadata(&candidate) {
-                        Ok(meta2) => {
-                            let ft = meta2.file_type();
-                            if ft.is_file() || ft.is_dir() {
-                                return Ok(candidate);
-                            } else if ft.is_symlink() {
-                                if let Ok(dm) = std::fs::metadata(&candidate)
-                                    && (dm.is_file() || dm.is_dir())
-                                {
-                                    return Ok(candidate);
-                                }
-                                return Err(AriaMoveError::ProvidedNotFile(candidate).into());
-                            } else {
-                                return Err(AriaMoveError::ProvidedNotFile(candidate).into());
-                            }
-                        }
-                        Err(e2) => {
-                            // Still not found (or other IO error) under base -> return structured error for candidate.
-                            let am = AriaMoveError::from_io(candidate, &e2);
-                            return Err(am.into());
-                        }
-                    }
-                }
+    let path = maybe_path.ok_or_else(|| AriaMoveError::NoneFound(config.download_base.clone()))?;
+    let selected = match std::fs::symlink_metadata(path) {
+        Ok(_) => path.to_path_buf(),
+        Err(e)
+            if e.kind() == std::io::ErrorKind::NotFound
+                && !path.has_root()
+                && path.components().count() == 1
+                && path.file_name().is_some() =>
+        {
+            config.download_base.join(path)
+        }
+        Err(e) => {
+            return Err(crate::errors::io_context(path, e));
+        }
+    };
+    let meta = std::fs::symlink_metadata(&selected)
+        .map_err(|e| crate::errors::io_context(&selected, e))?;
+    crate::config::paths::reject_symlinks(&selected)?;
+    if !meta.is_file() && !meta.is_dir() {
+        return Err(AriaMoveError::ProvidedNotFile(selected).into());
+    }
+    Ok(selected)
+}
 
-                // Map to structured error and stop (no bare-filename fallback applied).
-                let am = AriaMoveError::from_io(p, &e);
-                return Err(am.into());
+/// Resolve a CLI download path and promote nested files to their download's
+/// immediate child directory. Library resolve_source_path preserves explicit files.
+#[doc(hidden)]
+pub fn resolve_download_source(config: &Config, path: Option<&Path>) -> Result<PathBuf> {
+    // Resolve the exact OS path (including a bare quoted name under the base)
+    // before trying historical shell-quote tolerance. Never rewrite a valid name.
+    let selected = match resolve_source_path(config, path) {
+        Ok(selected) => selected,
+        Err(error)
+            if error.downcast_ref::<std::io::Error>().is_some_and(|cause| {
+                matches!(
+                    cause.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidFilename
+                )
+            }) =>
+        {
+            let decoded = path.and_then(decode_legacy_quotes);
+            match decoded {
+                Some(decoded) => resolve_source_path(config, Some(&decoded))?,
+                None => return Err(error),
+            }
+        }
+        Err(error) => return Err(error),
+    };
+    if !selected.is_file() {
+        return Ok(selected);
+    }
+    let absolute = dunce::canonicalize(&selected)?;
+    let base = dunce::canonicalize(&config.download_base)?;
+    if let Ok(relative) = absolute.strip_prefix(&base)
+        && relative.components().count() > 1
+        && let Some(first) = relative.components().next()
+    {
+        return Ok(base.join(first));
+    }
+    Ok(selected)
+}
+
+fn decode_legacy_quotes(path: &Path) -> Option<PathBuf> {
+    let text = path.to_str()?;
+    for quote in ['\'', '"'] {
+        if let Some(rest) = text.strip_prefix(quote) {
+            let rest = rest.strip_suffix('/').unwrap_or(rest);
+            if let Some(inner) = rest.strip_suffix(quote) {
+                let inner = if inner.len() > 3 {
+                    inner.strip_suffix('\\').unwrap_or(inner)
+                } else {
+                    inner
+                };
+                return Some(PathBuf::from(inner));
             }
         }
     }
-
-    // No explicit path provided -> out of scope. Do not auto-pick.
-    Err(AriaMoveError::NoneFound(config.download_base.clone()).into())
-}
-
-#[inline]
-fn is_bare_filename(p: &Path) -> bool {
-    // A single path component (no separators) and not absolute.
-    !p.has_root() && p.components().count() == 1 && p.file_name().is_some()
+    None
 }

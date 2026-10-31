@@ -1,6 +1,6 @@
 #![cfg(target_os = "linux")]
 
-use aria_move::{move_entry, Config};
+use aria_move::{Config, move_entry};
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
@@ -37,9 +37,11 @@ fn move_file_into_nonwritable_dest_yields_eacces() {
     fs::set_permissions(&completed_base, perms).unwrap();
 
     // Build config pointing to these bases
-    let mut cfg = Config::default();
-    cfg.download_base = PathBuf::from(&download_base);
-    cfg.completed_base = PathBuf::from(&completed_base);
+    let cfg = Config {
+        download_base: PathBuf::from(&download_base),
+        completed_base: PathBuf::from(&completed_base),
+        ..Config::default()
+    };
 
     // Attempt the move (should fail with EACCES/permission denied)
     let err = move_entry(&cfg, &src_file).expect_err("expected permission denied error");
@@ -47,10 +49,12 @@ fn move_file_into_nonwritable_dest_yields_eacces() {
 
     // Our helper adds a hint and OS code; assert key parts for Debian/Linux
     assert!(
-        msg.to_ascii_lowercase().contains("permission denied") ||
-        msg.contains("[os code: 13]") ||
-        msg.to_ascii_lowercase().contains("read-only filesystem")
-    , "unexpected error: {}", msg);
+        msg.to_ascii_lowercase().contains("permission denied")
+            || msg.contains("[os code: 13]")
+            || msg.to_ascii_lowercase().contains("read-only filesystem"),
+        "unexpected error: {}",
+        msg
+    );
 
     // Restore permissions so tempdir cleanup can remove the directory on all platforms
     let mut restore = fs::metadata(&completed_base).unwrap().permissions();

@@ -1,5 +1,1 @@
-# Cargo config to make local developer builds treat lints as warnings
-# Retained local setting; the audit records its limitations and removal backlog.
-
-[env]
-RUSTFLAGS = "-Cap-lints=warn"
+# Local builds use Cargo defaults; strict checks pass -D warnings explicitly.

@@ -30,10 +30,12 @@ fn move_file_succeeds_with_disable_locks_config_flag() {
     fs::set_permissions(&completed_base, perms).unwrap();
 
     // Use config flag (not env var) to disable locks
-    let mut cfg = Config::default();
-    cfg.download_base = PathBuf::from(&download_base);
-    cfg.completed_base = PathBuf::from(&completed_base);
-    cfg.disable_locks = true; // Set the flag directly
+    let cfg = Config {
+        download_base: PathBuf::from(&download_base),
+        completed_base: PathBuf::from(&completed_base),
+        disable_locks: true,
+        ..Config::default()
+    };
 
     let dest =
         move_entry(&cfg, &src).expect("move should succeed with disable_locks=true in config");

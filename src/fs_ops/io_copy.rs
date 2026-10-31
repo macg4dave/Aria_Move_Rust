@@ -1,305 +1,94 @@
-//! Streaming copy with durability / configurability.
-//!
-//! Features:
-//! - Writes to a newly created destination file (O_EXCL semantics; never clobbers).
-//! - Buffered I/O with large (1 MiB) buffers to reduce syscall count.
-//! - Optional write-through / full fsync for strong durability guarantees.
-//! - Returns a `CopyResult` struct for richer instrumentation.
-//!
-//! Snapshot semantics: the source file is read once from start to EOF; if it grows
-//! concurrently, the additional bytes are not included. Shrinks/truncation during
-//! copy will surface as read errors or early EOF; caller can compare `bytes` to the
-//! original metadata length if stricter validation is required.
+//! Bounded, cancellable transfer and byte-for-byte verification.
+use std::fs::File;
+use std::io::{self, Read, Seek, SeekFrom, Write};
 
-use std::fs::{File, OpenOptions};
-use std::io::{self, BufReader, BufWriter, Seek, SeekFrom, Write};
-use std::path::Path;
+const BUFFER_SIZE: usize = 1024 * 1024;
 
-/// Durability mode controlling post-write flush behavior.
-#[derive(Clone, Copy, Debug)]
-#[allow(dead_code)] // Data mode unused today (future lighter durability); keep for API clarity.
-pub enum DurabilityMode {
-    /// Ensure written data reaches the OS page cache (`flush`), but do not force
-    /// a disk barrier. Fastest; may lose data on sudden power loss.
-    Data,
-    /// Force data and metadata to stable storage (`sync_all`). Highest integrity.
-    Full,
-}
-
-/// Result of a streaming copy operation.
-#[derive(Debug, Clone, Copy)]
-pub struct CopyResult {
-    /// Total bytes copied from source to destination.
-    pub bytes: u64,
-    #[allow(dead_code)] // Not currently read by callers; retained for future perf instrumentation.
-    /// Size of the buffer used for copying (for perf metrics).
-    pub buf_size: usize,
-    #[allow(dead_code)] // Not currently read; retained for observability.
-    /// Durability mode applied.
-    pub mode: DurabilityMode,
-}
-
-/// Copy `src` -> `dst` using buffered I/O, then fsync the destination.
-/// Returns the number of bytes written.
-/// Notes:
-/// - `dst` is created with `create_new(true)` so we never clobber an existing file.
-/// - Callers are responsible for syncing the parent directory after the final rename.
-pub(super) fn copy_streaming(src: &Path, dst: &Path) -> io::Result<u64> {
-    // Backwards compatibility shim returning just bytes with Full semantics.
-    let res = copy_streaming_ex(src, dst, DurabilityMode::Full)?;
-    Ok(res.bytes)
-}
-
-/// Extended streaming copy with selectable durability.
-pub(super) fn copy_streaming_ex(
-    src: &Path,
-    dst: &Path,
-    mode: DurabilityMode,
-) -> io::Result<CopyResult> {
-    const BUF_SIZE: usize = 1024 * 1024; // 1 MiB buffers
-
-    // Fast-path: on macOS, try APFS clonefile to CoW-clone the file.
-    // This creates the destination path atomically and is O(1) for metadata.
-    #[cfg(target_os = "macos")]
-    {
-        use std::ffi::CString;
-        use std::os::unix::ffi::OsStrExt;
-        unsafe {
-            let src_c = CString::new(src.as_os_str().as_bytes()).unwrap();
-            let dst_c = CString::new(dst.as_os_str().as_bytes()).unwrap();
-            // clonefile returns 0 on success, -1 on error with errno set.
-            let rc = libc::clonefile(src_c.as_ptr(), dst_c.as_ptr(), 0);
-            if rc == 0 {
-                let bytes = File::open(src)?.metadata()?.len();
-                // Apply durability if requested
-                if matches!(mode, DurabilityMode::Full) {
-                    let f = File::options().read(true).write(false).open(dst)?;
-                    f.sync_all()?;
-                }
-                return Ok(CopyResult {
-                    bytes,
-                    buf_size: BUF_SIZE,
-                    mode,
-                });
-            } else {
-                // On errors like EXDEV/ENOTSUP/EPERM fall through to streaming; EEXIST should be
-                // impossible here since we always choose a unique temp name in higher layers.
-            }
+pub(super) fn copy_verified(source: &mut File, destination: &mut File) -> crate::AMResult<u64> {
+    source.seek(SeekFrom::Start(0))?;
+    let mut buffer = vec![0; BUFFER_SIZE];
+    let mut total = 0u64;
+    loop {
+        crate::shutdown::check()?;
+        let count = match source.read(&mut buffer) {
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            other => other?,
+        };
+        if count == 0 {
+            break;
         }
+        destination.write_all(&buffer[..count])?;
+        total = total
+            .checked_add(count as u64)
+            .ok_or_else(|| io::Error::other("file too large"))?;
     }
-
-    // Open source file for streaming or Linux fast-path.
-    let src_f = File::open(src)?;
-
-    // Destination options
-    let mut opts = OpenOptions::new();
-    opts.write(true).create_new(true);
-
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        // FILE_FLAG_WRITE_THROUGH = 0x80000000 improves durability for Full mode.
-        if matches!(mode, DurabilityMode::Full) {
-            const FILE_FLAG_WRITE_THROUGH: u32 = 0x8000_0000;
-            opts.custom_flags(FILE_FLAG_WRITE_THROUGH);
-        }
-    }
-
-    let dst_f = opts.open(dst)?;
-
-    // Fast-path: on Linux, try copy_file_range for in-kernel copy when supported.
-    #[cfg(target_os = "linux")]
-    {
-        use std::os::unix::io::AsRawFd;
-        // Try once with a large chunk size to detect support; if unsupported and no bytes copied,
-        // we'll fall back to streaming.
-        let mut total: u64 = 0;
-        let chunk: usize = 16 * 1024 * 1024; // 16 MiB per call
-        loop {
-            let rc = unsafe {
-                libc::copy_file_range(
-                    src_f.as_raw_fd(),
-                    std::ptr::null_mut(),
-                    dst_f.as_raw_fd(),
-                    std::ptr::null_mut(),
-                    chunk,
-                    0,
-                )
-            };
-            if rc > 0 {
-                total += rc as u64;
-                continue;
-            } else if rc == 0 {
-                // EOF reached
-                if matches!(mode, DurabilityMode::Full) {
-                    dst_f.sync_all()?;
-                }
-                return Ok(CopyResult {
-                    bytes: total,
-                    buf_size: BUF_SIZE,
-                    mode,
-                });
-            } else {
-                // Error; if no bytes copied and error indicates unsupported, fall back.
-                let err = io::Error::last_os_error();
-                if total == 0 {
-                    if let Some(code) = err.raw_os_error() {
-                        if code == libc::EXDEV
-                            || code == libc::ENOSYS
-                            || code == libc::EINVAL
-                            || code == libc::EPERM
-                        {
-                            // Unsupported; break to streaming fallback
-                        } else {
-                            return Err(err);
-                        }
-                    } else {
-                        return Err(err);
-                    }
-                } else {
-                    // Partial copy then error: return error; higher level will cleanup temp.
-                    return Err(err);
-                }
-                break; // fallback
-            }
-        }
-    }
-
-    // Streaming fallback (or non-Linux/non-macOS default): buffered io::copy
-    let mut reader = BufReader::with_capacity(BUF_SIZE, src_f);
-    let mut writer = BufWriter::with_capacity(BUF_SIZE, dst_f);
-    let bytes = io::copy(&mut reader, &mut writer)?;
-    writer.flush()?;
-
-    if matches!(mode, DurabilityMode::Full) {
-        writer.get_ref().sync_all()?;
-    }
-
-    Ok(CopyResult {
-        bytes,
-        buf_size: BUF_SIZE,
-        mode,
-    })
+    destination.sync_all()?;
+    verify_equal(source, destination)?;
+    Ok(total)
 }
 
-/// Resume variant: append remaining bytes to an existing temp file that is smaller than the source.
-/// Preconditions: `dst` exists, its length == `offset`, and `offset < source_size`.
-/// Returns the final total bytes written (should equal source size on success).
-pub(super) fn copy_streaming_resume(src: &Path, dst: &Path, offset: u64) -> io::Result<u64> {
-    let src_f = File::open(src)?;
-    let src_meta = src_f.metadata()?;
-    let total = src_meta.len();
-    if offset >= total {
-        return Ok(offset);
+/// Check both bytes and EOF. Used immediately before source deletion as well as
+/// staging, so same-length changes are not mistaken for a completed transfer.
+pub(super) fn verify_equal(source: &mut File, destination: &mut File) -> crate::AMResult<()> {
+    source.seek(SeekFrom::Start(0))?;
+    destination.seek(SeekFrom::Start(0))?;
+    let mut left = vec![0; BUFFER_SIZE];
+    let mut right = vec![0; BUFFER_SIZE];
+    loop {
+        crate::shutdown::check()?;
+        let n = source.read(&mut left)?;
+        if n == 0 {
+            anyhow::ensure!(
+                destination.read(&mut right[..1])? == 0,
+                "copy has extra data"
+            );
+            return Ok(());
+        }
+        destination.read_exact(&mut right[..n])?;
+        anyhow::ensure!(
+            left[..n] == right[..n],
+            "source changed or copied data differs"
+        );
     }
-
-    let mut dst_f = OpenOptions::new().write(true).read(true).open(dst)?;
-    let cur_len = dst_f.metadata()?.len();
-    if cur_len != offset {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "resume offset mismatch",
-        ));
-    }
-
-    // Seek source to offset and destination to end.
-    let mut reader = BufReader::new(src_f);
-    reader.seek(SeekFrom::Start(offset))?;
-    dst_f.seek(SeekFrom::Start(offset))?; // should already be at end, but enforce
-    let mut writer = BufWriter::new(dst_f);
-
-    let copied = io::copy(&mut reader, &mut writer)?;
-    writer.flush()?;
-    writer.get_ref().sync_all()?; // durability same as full mode
-
-    Ok(offset + copied)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use tempfile::tempdir;
+    use tempfile::tempfile;
 
     #[test]
-    fn copy_small_file_ok() {
-        let dir = tempdir().unwrap();
-        let src_path = dir.path().join("src.txt");
-        let dst_path = dir.path().join("dst.txt");
-
-        // Write some content
-        let data = b"hello world";
-        fs::write(&src_path, data).unwrap();
-
-        let n = copy_streaming(&src_path, &dst_path).unwrap();
-        assert_eq!(n, data.len() as u64);
-
-        let got = fs::read(&dst_path).unwrap();
-        assert_eq!(&got, data);
-    }
-
-    #[test]
-    fn copy_zero_length_ok() {
-        let dir = tempdir().unwrap();
-        let src_path = dir.path().join("empty");
-        let dst_path = dir.path().join("out");
-        File::create(&src_path).unwrap(); // empty file
-
-        let n = copy_streaming(&src_path, &dst_path).unwrap();
-        assert_eq!(n, 0);
-        let meta = fs::metadata(&dst_path).unwrap();
-        assert_eq!(meta.len(), 0);
-    }
-
-    #[test]
-    fn fails_if_dest_exists() {
-        let dir = tempdir().unwrap();
-        let src_path = dir.path().join("src");
-        let dst_path = dir.path().join("dst");
-        fs::write(&src_path, b"data").unwrap();
-        // Pre-create destination
-        let mut f = File::create(&dst_path).unwrap();
-        f.write_all(b"x").unwrap();
-        drop(f);
-
-        let err = copy_streaming(&src_path, &dst_path).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
-    }
-
-    #[test]
-    fn large_file_copy_boundary() {
-        let dir = tempdir().unwrap();
-        let src = dir.path().join("big.bin");
-        let dst = dir.path().join("big.out");
-
-        // Size > 2 * BUF_SIZE + 123 to cross multiple boundaries
-        const BUF_SIZE: usize = 1024 * 1024;
-        let size = 2 * BUF_SIZE + 123;
-        let mut data = vec![0u8; size];
-        for (i, b) in data.iter_mut().enumerate() {
-            *b = (i % 251) as u8; // pseudo pattern
+    fn verifies_empty_small_and_buffer_boundaries() -> crate::AMResult<()> {
+        let _guard = crate::shutdown::test_guard();
+        for size in [0, 11, BUFFER_SIZE * 2 + 123] {
+            let mut source = tempfile()?;
+            let bytes: Vec<_> = (0..size).map(|n| (n % 251) as u8).collect();
+            source.write_all(&bytes)?;
+            let mut destination = tempfile()?;
+            assert_eq!(copy_verified(&mut source, &mut destination)?, size as u64);
+            destination.rewind()?;
+            let mut actual = Vec::new();
+            destination.read_to_end(&mut actual)?;
+            assert_eq!(actual, bytes);
         }
-        fs::write(&src, &data).unwrap();
-
-        let res = copy_streaming_ex(&src, &dst, DurabilityMode::Data).unwrap();
-        assert_eq!(res.bytes as usize, size);
-        assert_eq!(res.buf_size, BUF_SIZE);
-        assert!(matches!(res.mode, DurabilityMode::Data));
-
-        let out = fs::read(&dst).unwrap();
-        assert_eq!(out, data);
+        Ok(())
     }
 
     #[test]
-    fn durability_full_syncs() {
-        let dir = tempdir().unwrap();
-        let src = dir.path().join("d.txt");
-        let dst = dir.path().join("d.out");
-        fs::write(&src, b"abcdef").unwrap();
-        let res = copy_streaming_ex(&src, &dst, DurabilityMode::Full).unwrap();
-        assert_eq!(res.bytes, 6);
-        assert!(matches!(res.mode, DurabilityMode::Full));
-        let got = fs::read(&dst).unwrap();
-        assert_eq!(got, b"abcdef");
+    fn detects_equal_size_corruption_and_cancellation() -> crate::AMResult<()> {
+        let _guard = crate::shutdown::test_guard();
+        let mut source = tempfile()?;
+        let mut destination = tempfile()?;
+        source.write_all(b"abc")?;
+        destination.write_all(b"xyz")?;
+        assert!(verify_equal(&mut source, &mut destination).is_err());
+        crate::shutdown::request();
+        let error = copy_verified(&mut source, &mut destination).unwrap_err();
+        crate::shutdown::reset();
+        assert_eq!(
+            error.downcast_ref::<crate::AriaMoveError>(),
+            Some(&crate::AriaMoveError::Interrupted)
+        );
+        Ok(())
     }
 }

@@ -8,4 +8,4 @@ ignore = []  # add specific RUSTSEC-* IDs here if needed
 
 [output]
 quiet = false
-json = false
+format = "terminal"

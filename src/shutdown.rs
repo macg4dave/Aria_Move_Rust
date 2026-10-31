@@ -7,45 +7,65 @@
 //! - Relaxed atomics are sufficient for a one-way "stop" flag.
 //! - `request()` is safe to call from signal handlers.
 //!
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU16, Ordering};
+// Bit 8 records the request; low byte stores its first nonzero reason atomically.
+static STATE: AtomicU16 = AtomicU16::new(0);
 
-static SHUTDOWN: AtomicBool = AtomicBool::new(false);
-// 0 = None, 1 = Signal, 2 = User, 3 = Space, 4 = Error (generic)
-static REASON: AtomicU8 = AtomicU8::new(0);
-
-/// Request a cooperative shutdown (idempotent).
-#[inline]
+/// Request shutdown with the signal reason.
 pub fn request() {
     request_with_reason(1);
 }
-
-/// Request with a semantic reason code; first reason sticks (idempotent flag).
+/// Request shutdown; retain the first nonzero reason.
 pub fn request_with_reason(code: u8) {
-    SHUTDOWN.store(true, Ordering::Relaxed);
-    // Preserve first non-zero reason; if already set, leave it.
-    // Use compare_exchange to ensure atomicity (first write wins).
-    if code != 0 {
-        let _ = REASON.compare_exchange(0, code, Ordering::Relaxed, Ordering::Relaxed);
-    }
+    let _ = STATE.try_update(Ordering::Relaxed, Ordering::Relaxed, |old| {
+        Some(0x100 | old | if old & 0xff == 0 { code as u16 } else { 0 })
+    });
 }
-
-/// Check whether a shutdown has been requested.
-#[inline]
+/// Whether cooperative cancellation has been requested.
 pub fn is_requested() -> bool {
-    SHUTDOWN.load(Ordering::Relaxed)
+    STATE.load(Ordering::Relaxed) & 0x100 != 0
 }
-
-/// Get numeric reason code (0 = none).
+/// First nonzero reason, or zero if unspecified.
 pub fn reason_code() -> u8 {
-    REASON.load(Ordering::Relaxed)
+    STATE.load(Ordering::Relaxed) as u8
+}
+/// Abort at a cancellation point with the stable typed error.
+pub fn check() -> crate::AMResult<()> {
+    if is_requested() {
+        Err(crate::AriaMoveError::Interrupted.into())
+    } else {
+        Ok(())
+    }
 }
 
 /// Test/utility-only: clear the shutdown flag.
 #[cfg(any(test, feature = "test-helpers"))]
 #[inline]
 pub fn reset() {
-    SHUTDOWN.store(false, Ordering::Relaxed);
-    REASON.store(0, Ordering::Relaxed);
+    STATE.store(0, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+#[cfg(test)]
+pub(crate) struct TestGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+#[cfg(test)]
+pub(crate) fn test_guard() -> TestGuard {
+    let guard = TestGuard {
+        _lock: TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    };
+    reset();
+    guard
+}
+#[cfg(test)]
+impl Drop for TestGuard {
+    fn drop(&mut self) {
+        reset();
+    }
 }
 
 #[cfg(test)]
@@ -54,6 +74,7 @@ mod tests {
 
     #[test]
     fn reason_defaults_to_zero() {
+        let _guard = crate::shutdown::test_guard();
         reset();
         assert_eq!(reason_code(), 0);
         assert!(!is_requested());
@@ -61,22 +82,27 @@ mod tests {
 
     #[test]
     fn request_sets_flag_and_reason() {
+        let _guard = crate::shutdown::test_guard();
         reset();
         request_with_reason(3);
         assert!(is_requested());
         assert_eq!(reason_code(), 3);
+        reset();
     }
 
     #[test]
     fn first_reason_wins() {
+        let _guard = crate::shutdown::test_guard();
         reset();
         request_with_reason(2);
         request_with_reason(4);
         assert_eq!(reason_code(), 2); // original preserved
+        reset();
     }
 
     #[test]
     fn reset_clears_both() {
+        let _guard = crate::shutdown::test_guard();
         reset();
         request_with_reason(1);
         reset();

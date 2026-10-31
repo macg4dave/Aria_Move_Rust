@@ -1,28 +1,13 @@
-//! XML configuration support.
-//! - Loads settings from config.xml (quick_xml).
-//! - Creates a secure template if missing (unless ARIA_MOVE_CONFIG is set).
-//! - Exposes helpers to ensure a default config exists.
-//!
-//! Notes:
-//! - This module only reads/writes the config file; directory validation happens elsewhere.
-//! - Unknown XML fields cause a hard failure (panic) to surface misconfigurations early.
-
+//! One fallible XML mapping and one exclusive template writer.
+use super::paths::{default_config_path, reject_symlinks};
+use super::types::{Config, LogLevel};
+use super::{COMPLETED_BASE_DEFAULT, DOWNLOAD_BASE_DEFAULT};
 use anyhow::{Context, Result};
 use quick_xml::de::from_str as from_xml_str;
 use serde::Deserialize;
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-// duration no longer parsed from XML; keep runtime default in Config
-use tracing::{debug, info};
 
-use super::paths::{default_config_path, default_log_path, path_has_symlink_ancestor};
-use super::{COMPLETED_BASE_DEFAULT, DOWNLOAD_BASE_DEFAULT};
-
-use crate::config::types::{Config, LogLevel};
-use crate::platform::{set_dir_mode_0700, set_file_mode_0600, write_config_secure_new_0600};
-
-/// Struct mirroring the XML config for deserialization.
 #[derive(Debug, Deserialize)]
 #[serde(rename = "config")]
 #[serde(deny_unknown_fields)]
@@ -43,207 +28,61 @@ struct XmlConfig {
     disable_locks: Option<bool>,
 }
 
-// Reduce visual complexity of the return type used by load_config_from_xml().
+// Legacy tuple API retained as a compatibility adapter; runtime uses Config.
 type LoadedConfig = (
-    PathBuf,          // download_base
-    PathBuf,          // completed_base
-    Option<LogLevel>, // log_level
-    Option<PathBuf>,  // log_file
-    bool,             // preserve_metadata
-    bool,             // preserve_permissions
-    bool,             // disable_locks
+    PathBuf,
+    PathBuf,
+    Option<LogLevel>,
+    Option<PathBuf>,
+    bool,
+    bool,
+    bool,
 );
 
-/// Read config from XML. OS-aware default path used if ARIA_MOVE_CONFIG not set.
-/// Returns None if no meaningful settings are present or the file doesn’t exist.
+/// Legacy optional loader. Errors are diagnosed; callers needing failure handling
+/// should use load_config_from_xml_path instead.
 pub fn load_config_from_xml() -> Option<LoadedConfig> {
-    // 1) Choose config path:
-    //    - ARIA_MOVE_CONFIG (if set)
-    //    - default per-platform path (best-effort)
-    // Resolve env override via default_config_path() to keep logic (rel/dir) consistent
-    let env_set = env::var_os("ARIA_MOVE_CONFIG").is_some();
-    let cfg_path = default_config_path().ok()?;
-
-    // 2) If missing: create a template (only when using default path), then return None.
-    if !cfg_path.exists() {
-        if !env_set {
-            let _ = create_template_config(&cfg_path);
-        }
-        return None;
-    }
-
-    // 3) Read and parse
-    let content = fs::read_to_string(&cfg_path).ok()?;
-    let parsed: XmlConfig = match from_xml_str(&content) {
-        Ok(x) => x,
+    let path = default_config_path().ok()?;
+    match load_config_from_xml_path(&path) {
+        Ok(cfg) => Some((
+            cfg.download_base,
+            cfg.completed_base,
+            Some(cfg.log_level),
+            cfg.log_file,
+            cfg.preserve_metadata,
+            cfg.preserve_permissions,
+            cfg.disable_locks,
+        )),
         Err(e) => {
-            // Fail hard on unknown field (serde deny_unknown_fields); else, log and return None.
-            let msg = e.to_string();
-            if msg.contains("unknown field") {
-                panic!(
-                    "Unknown field in aria_move config {}: {}. Refusing to start.",
-                    cfg_path.display(),
-                    msg
-                );
-            }
-            debug!(
-                "Failed to parse config.xml at {}: {}",
-                cfg_path.display(),
-                msg
-            );
-            return None;
-        }
-    };
-
-    // 4) Map fields
-    let download_base = parsed
-        .download_base
-        .as_deref()
-        .map(|s| PathBuf::from(s.trim()));
-    let completed_base = parsed
-        .completed_base
-        .as_deref()
-        .map(|s| PathBuf::from(s.trim()));
-    let log_level = parsed
-        .log_level
-        .as_deref()
-        .and_then(|s| s.trim().parse::<LogLevel>().ok());
-    // Only override the default log file if user specified a non-empty value.
-    // (If tag omitted or empty, we leave Config default in place during merge.)
-    let log_file = parsed
-        .log_file
-        .as_deref()
-        .and_then(|s| {
-            let trimmed = s.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(PathBuf::from(trimmed))
-            }
-        });
-    let preserve_metadata = parsed.preserve_metadata.unwrap_or(false);
-    let preserve_permissions = parsed.preserve_permissions.unwrap_or(false);
-    let disable_locks = parsed.disable_locks.unwrap_or(false);
-
-    // If no meaningful settings were provided, treat as "no config" so callers can use defaults.
-    if download_base.is_none()
-        && completed_base.is_none()
-        && log_level.is_none()
-        && log_file.is_none()
-    {
-        return None;
-    }
-
-    Some((
-        download_base.unwrap_or_else(|| PathBuf::from(DOWNLOAD_BASE_DEFAULT)),
-        completed_base.unwrap_or_else(|| PathBuf::from(COMPLETED_BASE_DEFAULT)),
-        log_level,
-    // Do NOT inject a default here; leave Config::default() value intact unless user provided one.
-    log_file,
-        preserve_metadata,
-        preserve_permissions,
-        disable_locks,
-    ))
-}
-
-/// Create default template config file and parent directory (best-effort permissions).
-/// Uses secure creation to avoid following attacker-controlled symlinks on Unix.
-pub fn create_template_config(path: &Path) -> Result<()> {
-    if path_has_symlink_ancestor(path)? {
-        return Err(anyhow::anyhow!(
-            "Refusing to create config: ancestor of {} is a symlink",
-            path.display()
-        ));
-    }
-
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-        let _ = set_dir_mode_0700(parent);
-    }
-
-    let suggested_log = default_log_path()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|_| "/path/to/aria_move.log".into());
-
-    let content = format!(
-        r#"<!--
-    aria_move configuration (XML)
-
-    Boolean flags (true/false):
-        preserve_metadata      -> copy permissions + timestamps (+ xattrs when feature enabled)
-        preserve_permissions   -> copy only permissions (mode on Unix, readonly on Windows)
-        disable_locks          -> disable directory locking (for ZFS/NFS/network shares in containers)
-
-    Other fields:
-        download_base          -> directory where new/partial downloads appear
-        completed_base         -> directory where completed items are moved
-        log_level              -> quiet | normal | info | debug
-        log_file               -> path to log file (optional; stdout/stderr still used)
-
-    Notes:
-        - CLI flags override XML values.
-        - Setting preserve_metadata implies permissions; preserve_permissions is ignored if preserve_metadata=true.
-        - Set disable_locks=true only if you encounter "Permission denied (os error 13)" on ZFS/NFS shares in containers.
--->
-<config>
-    <download_base>{}</download_base>
-    <completed_base>{}</completed_base>
-    <log_level>normal</log_level>
-    <log_file>{}</log_file>
-    <preserve_metadata>false</preserve_metadata>
-    <preserve_permissions>false</preserve_permissions>
-    <disable_locks>false</disable_locks>
-</config>
-"#,
-        DOWNLOAD_BASE_DEFAULT, COMPLETED_BASE_DEFAULT, suggested_log
-    );
-
-    // Atomic, secure write (O_NOFOLLOW + create_new on Unix), then tighten perms.
-    write_config_secure_new_0600(path, content.as_bytes())?;
-    let _ = set_file_mode_0600(path);
-
-    info!("Created template config at {}", path.display());
-    Ok(())
-}
-
-/// Create default config if ARIA_MOVE_CONFIG not set; return created path so CLI can inform the user.
-pub fn ensure_default_config_exists() -> Option<PathBuf> {
-    if env::var_os("ARIA_MOVE_CONFIG").is_some() {
-        return None;
-    }
-
-    let cfg_path = match default_config_path() {
-        Ok(p) => p,
-        Err(_) => return None,
-    };
-
-    if cfg_path.exists() {
-        return None;
-    }
-
-    if let Ok(true) = path_has_symlink_ancestor(&cfg_path) {
-        eprintln!(
-            "Refusing to create template config because an existing ancestor is a symlink: {}",
-            cfg_path.display()
-        );
-        return None;
-    }
-
-    match create_template_config(&cfg_path) {
-        Ok(()) => Some(cfg_path),
-        Err(e) => {
-            eprintln!(
-                "Failed to create template config at {}: {}",
-                cfg_path.display(),
-                e
-            );
+            tracing::warn!(error = %e, "Unable to load config");
             None
         }
     }
 }
 
-// Map XmlConfig -> Config (used by both loaders)
-fn xml_to_config(parsed: XmlConfig) -> Config {
+/// Write a complete template without replacing an existing file.
+pub fn create_template_config(path: &Path) -> Result<()> {
+    reject_symlinks(path)?;
+    let content = "<!-- Edit both placeholder paths before running. CLI values override XML. -->\n<config>\n  <download_base>/path/to/incoming</download_base>\n  <completed_base>/path/to/completed</completed_base>\n  <log_level>normal</log_level>\n  <log_file></log_file>\n  <preserve_metadata>false</preserve_metadata>\n  <preserve_permissions>false</preserve_permissions>\n  <disable_locks>false</disable_locks>\n</config>\n";
+    crate::platform::write_config_secure_new_0600(path, content.as_bytes())
+}
+
+/// Best-effort compatibility entry point for default template creation.
+pub fn ensure_default_config_exists() -> Option<PathBuf> {
+    if std::env::var_os("ARIA_MOVE_CONFIG").is_some() {
+        return None;
+    }
+    let path = default_config_path().ok()?;
+    match create_template_config(&path) {
+        Ok(()) => Some(path),
+        Err(e) => {
+            tracing::debug!(error = %e, "Default config not created");
+            None
+        }
+    }
+}
+
+fn xml_to_config(parsed: XmlConfig) -> Result<Config> {
     let default_cfg = Config::default();
     let download_base = parsed
         .download_base
@@ -262,7 +101,11 @@ fn xml_to_config(parsed: XmlConfig) -> Config {
     let log_level = parsed
         .log_level
         .as_deref()
-        .and_then(|s| s.trim().parse::<LogLevel>().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::parse)
+        .transpose()
+        .map_err(anyhow::Error::msg)?
         .unwrap_or(default_cfg.log_level);
     let preserve_metadata = parsed.preserve_metadata.unwrap_or(false);
     let preserve_permissions = if preserve_metadata {
@@ -271,7 +114,7 @@ fn xml_to_config(parsed: XmlConfig) -> Config {
         parsed.preserve_permissions.unwrap_or(false)
     };
     let disable_locks = parsed.disable_locks.unwrap_or(false);
-    Config {
+    Ok(Config {
         download_base,
         completed_base,
         log_level,
@@ -280,45 +123,83 @@ fn xml_to_config(parsed: XmlConfig) -> Config {
         preserve_metadata,
         preserve_permissions,
         disable_locks,
-    }
+    })
 }
 
-/// Load a Config from a specific XML file path (quick_xml).
+/// Parse an explicit config path. Unknown fields and malformed XML return errors.
 pub fn load_config_from_xml_path(path: &Path) -> Result<Config> {
-    let contents = fs::read_to_string(path)
+    load_for_app(path).map(|loaded| loaded.config)
+}
+
+/// Settings and explicit log selection from one XML read.
+#[derive(Debug)]
+pub struct LoadedSettings {
+    pub config: Config,
+    pub explicit_log: Option<PathBuf>,
+}
+
+/// Load settings together with the explicit log path for dry-run policy.
+pub fn load_for_app(path: &Path) -> Result<LoadedSettings> {
+    reject_symlinks(path)?;
+    let mut file = crate::platform::open_regular_read(path)?;
+    let mut contents = String::new();
+    std::io::Read::read_to_string(&mut file, &mut contents)
         .with_context(|| format!("read config xml '{}'", path.display()))?;
     let parsed: XmlConfig = from_xml_str(&contents)
         .with_context(|| format!("parse config xml '{}'", path.display()))?;
-    Ok(xml_to_config(parsed))
+    let explicit_log = parsed
+        .log_file
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from);
+    Ok(LoadedSettings {
+        config: xml_to_config(parsed)?,
+        explicit_log,
+    })
 }
 
-/// If ARIA_MOVE_CONFIG is set, load and return that Config; otherwise Ok(None).
+/// Load an environment override, including a directory override's config.xml.
 pub fn load_config_from_xml_env() -> Result<Option<Config>> {
-    if let Some(p) = env::var_os("ARIA_MOVE_CONFIG") {
-        eprintln!("[DEBUG] ARIA_MOVE_CONFIG is set to: {:?}", p);
-        let cfg = load_config_from_xml_path(Path::new(&p))?;
-        eprintln!(
-            "[DEBUG] Loaded config - download_base: {}",
-            cfg.download_base.display()
-        );
-        eprintln!(
-            "[DEBUG] Loaded config - completed_base: {}",
-            cfg.completed_base.display()
-        );
-        return Ok(Some(cfg));
+    if std::env::var_os("ARIA_MOVE_CONFIG").is_some() {
+        return load_config_from_xml_path(&default_config_path()?).map(Some);
     }
-    eprintln!("[DEBUG] ARIA_MOVE_CONFIG not set, will use default config path");
     Ok(None)
 }
 
-/// Try loading Config from the platform default config.xml path.
-/// Returns Ok(Some(cfg)) if the file exists and parses; Ok(None) if missing.
+/// Load the selected default path, returning None only when it is missing.
 pub fn load_config_from_default_xml() -> Result<Option<Config>> {
-    let path = default_config_path().context("resolve default config path")?;
-    if !path.exists() {
-        return Ok(None);
+    let path = default_config_path()?;
+    match fs::symlink_metadata(&path) {
+        Ok(_) => load_config_from_xml_path(&path).map(Some),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.into()),
     }
-    eprintln!("[INFO] Using config from default XML: {}", path.display());
-    let cfg = load_config_from_xml_path(&path)?;
-    Ok(Some(cfg))
+}
+
+/// Outcome of loading an existing config or creating a template for editing.
+#[derive(Debug)]
+pub enum LoadResult {
+    Loaded(Config, PathBuf),
+    CreatedTemplate(PathBuf),
+}
+
+/// Load the selected configuration, creating a template only when it is missing.
+pub fn load_or_init() -> Result<LoadResult> {
+    let path = default_config_path()?;
+    match fs::symlink_metadata(&path) {
+        Ok(_) => Ok(LoadResult::Loaded(load_config_from_xml_path(&path)?, path)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            create_template_config(&path)?;
+            Ok(LoadResult::CreatedTemplate(path))
+        }
+        Err(e) => Err(e).with_context(|| format!("stat config {}", path.display())),
+    }
+}
+
+/// Ensure a default configuration exists and return its path.
+pub fn ensure_selected_config_exists() -> Result<PathBuf> {
+    match load_or_init()? {
+        LoadResult::Loaded(_, path) | LoadResult::CreatedTemplate(path) => Ok(path),
+    }
 }

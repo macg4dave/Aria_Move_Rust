@@ -46,7 +46,7 @@ fn safe_copy_and_rename_creates_destination_and_cleans_tmp() {
 }
 
 #[test]
-fn safe_copy_and_rename_handles_existing_destination_by_replacing() {
+fn safe_copy_and_rename_refuses_existing_destination() {
     let td = tempdir().unwrap();
 
     let src = td.path().join("src2.txt");
@@ -59,8 +59,12 @@ fn safe_copy_and_rename_handles_existing_destination_by_replacing() {
     // Precreate destination with older content
     fs::write(&dest, "old").expect("precreate destination");
 
-    // Should overwrite existing file
-    safe_copy_and_rename(&src, &dest).expect("safe_copy_and_rename overwrite");
+    let error = safe_copy_and_rename(&src, &dest).unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<std::io::Error>().unwrap().kind(),
+        std::io::ErrorKind::AlreadyExists
+    );
+    assert_eq!(fs::read_to_string(&src).unwrap(), "new content");
     let content = fs::read_to_string(&dest).expect("read destination");
-    assert_eq!(content, "new content");
+    assert_eq!(content, "old");
 }

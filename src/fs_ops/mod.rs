@@ -11,7 +11,6 @@
 // Internal implementation modules (crate-private)
 //
 mod atomic;
-mod claim;
 mod copy;
 mod dir_move;
 mod duplicate;
@@ -36,7 +35,7 @@ pub use entry::move_entry;
 pub use file_move::move_file;
 pub use helpers::{io_error_with_help, io_error_with_help_io};
 pub use metadata::{preserve_metadata, preserve_xattrs};
-pub use resolve::resolve_source_path;
+pub use resolve::{resolve_download_source, resolve_source_path};
 pub use util::resume_temp_path; // expose for tests (deterministic resume temp naming)
 
 // Locking API (currently considered advanced; subject to change)

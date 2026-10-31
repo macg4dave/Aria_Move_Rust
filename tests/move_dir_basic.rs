@@ -82,10 +82,11 @@ fn move_dir_dry_run() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(unix)]
 #[test]
 fn move_dir_partial_failure_cleanup() -> Result<(), Box<dyn std::error::Error>> {
-    // Force copy path to exercise cleanup logic
-    unsafe {
-        std::env::set_var("ARIA_MOVE_FORCE_DIR_COPY", "1");
+    // SAFETY: geteuid has no preconditions and does not mutate process state.
+    if unsafe { libc::geteuid() } == 0 {
+        return Ok(());
     }
+    // Unwritable destinations must fail without changing the source.
 
     let download = tempdir()?;
     let completed = tempdir()?;
@@ -104,6 +105,7 @@ fn move_dir_partial_failure_cleanup() -> Result<(), Box<dyn std::error::Error>> 
     fs::set_permissions(completed.path(), base_perms)?;
 
     let result = fs_ops::move_dir(&cfg, &src_dir);
+    fs::set_permissions(completed.path(), fs::Permissions::from_mode(0o700))?;
     assert!(
         result.is_err(),
         "expected error due to unwritable destination"
@@ -117,8 +119,5 @@ fn move_dir_partial_failure_cleanup() -> Result<(), Box<dyn std::error::Error>> 
     );
 
     // Unset the env var
-    unsafe {
-        std::env::remove_var("ARIA_MOVE_FORCE_DIR_COPY");
-    }
     Ok(())
 }
