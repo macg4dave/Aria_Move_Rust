@@ -32,6 +32,10 @@ pub fn default_config_path() -> Result<PathBuf> {
 
 /// Make an explicit config path absolute; a directory means its `config.xml`.
 pub fn resolve_config_path(path: &Path) -> Result<PathBuf> {
+    anyhow::ensure!(
+        !path.as_os_str().is_empty(),
+        "configuration path must not be empty"
+    );
     let absolute = std::path::absolute(path)
         .with_context(|| format!("resolve config path '{}'", path.display()))?;
     Ok(if absolute.is_dir() {
@@ -79,6 +83,7 @@ mod tests {
 
     #[test]
     fn directories_resolve_to_their_config_file() {
+        assert!(resolve_config_path(Path::new("")).is_err());
         let temp = tempfile::tempdir().unwrap();
         assert_eq!(
             resolve_config_path(temp.path()).unwrap(),

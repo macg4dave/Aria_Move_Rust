@@ -39,6 +39,31 @@ pub fn create_template_config(path: &Path) -> Result<()> {
         .with_context(|| format!("write template config '{}'", path.display()))
 }
 
+/// Write configured bases exclusively, escaping XML metacharacters.
+pub fn write_config(path: &Path, cfg: &Config) -> Result<()> {
+    let escape = |p: &Path| -> Result<String> {
+        let text = p
+            .to_str()
+            .context("configuration paths must be valid Unicode")?;
+        Ok(quick_xml::escape::escape(text).into_owned())
+    };
+    let xml = format!(
+        "<config>\n  <download_base>{}</download_base>\n  <completed_base>{}</completed_base>\n  <log_level>{}</log_level>\n  <preserve_metadata>{}</preserve_metadata>\n  <preserve_permissions>{}</preserve_permissions>\n  <disable_locks>{}</disable_locks>\n</config>\n",
+        escape(&cfg.download_base)?,
+        escape(&cfg.completed_base)?,
+        cfg.log_level,
+        cfg.preserve_metadata,
+        cfg.preserve_permissions,
+        cfg.disable_locks
+    );
+    platform::write_new_file(path, xml.as_bytes()).with_context(|| {
+        format!(
+            "create config '{}'; existing files are never overwritten",
+            path.display()
+        )
+    })
+}
+
 /// Read and parse a config file. Symlinks, malformed XML, unknown elements
 /// and invalid values are errors.
 pub fn load_config(path: &Path) -> Result<Config> {

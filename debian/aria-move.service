@@ -1,0 +1,41 @@
+[Unit]
+Description=Aria Move download manager
+Wants=network-online.target
+After=network-online.target
+Documentation=https://github.com/macg4dave/Aria_Move_Rust
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=aria-move
+Group=aria-move
+StateDirectory=aria-move
+StateDirectoryMode=0750
+RuntimeDirectory=aria-move
+RuntimeDirectoryMode=0700
+LogsDirectory=aria-move
+LogsDirectoryMode=0750
+WorkingDirectory=/var/lib/aria-move
+Environment=ARIA_MOVE_CONFIG=/etc/aria_move/config.xml
+ExecStartPre=/usr/bin/aria_move --check-config
+ExecStart=/usr/lib/aria-move/start-service
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=120
+KillMode=mixed
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+if [ "$1" = configure ]; then
+    if ! getent passwd aria-move >/dev/null; then
+        adduser --system --group --home /var/lib/aria-move --no-create-home aria-move
+    fi
+    install -d -o aria-move -g aria-move -m 0750 /var/lib/aria-move /var/log/aria-move
+    install -d -o aria-move -g aria-move -m 0750 /var/lib/aria-move/incoming /var/lib/aria-move/completed
+    if [ ! -e /var/lib/aria-move/aria2.session ]; then
+        install -o aria-move -g aria-move -m 0640 /dev/null /var/lib/aria-move/aria2.session
+    fi
+fi
+#DEBHELPER#
+if [ "$1" = configure ]; then
+    echo 'Aria Move: configuration is in /etc/aria_move; manage with systemctl status aria-move.'
+    echo 'RPC listens on localhost:6800; read the private token with sudo cat /var/lib/aria-move/rpc-secret after service start.'
+    echo 'For startup errors: journalctl -u aria-move -e. See /usr/share/doc/aria-move/INSTALLATION.md.'
+fi

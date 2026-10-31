@@ -21,12 +21,21 @@ fn run(args: Args) -> Result<()> {
         output::print_info(&format!("Config path:\n  {}", config_path.display()));
         return Ok(());
     }
+    if args.init {
+        let mut cfg = config::Config::default();
+        args.apply_overrides(&mut cfg);
+        cfg.dry_run = true;
+        config::validate_and_normalize(&mut cfg)?;
+        config::xml::write_config(&config_path, &cfg)?;
+        output::print_success(&format!("Configuration created: {}", config_path.display()));
+        return Ok(());
+    }
     let mut cfg = match std::fs::symlink_metadata(&config_path) {
         Ok(_) => config::load_config(&config_path)?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            if args.dry_run {
+            if args.dry_run || args.check_config {
                 bail!(
-                    "Config missing: {}; a dry run does not create one",
+                    "Config missing: {}; run --init --download-base PATH --completed-base PATH (with the same --config option) to create it",
                     config_path.display()
                 );
             }
@@ -35,14 +44,23 @@ fn run(args: Args) -> Result<()> {
                 "A template config was written to: {}",
                 config_path.display()
             ));
-            output::print_info("Edit download_base and completed_base, then run again.");
-            return Ok(());
+            bail!(
+                "Setup required: edit download_base and completed_base in the template, then run again. Alternatively delete the template and use --init --download-base PATH --completed-base PATH."
+            );
         }
         Err(e) => {
             return Err(e).with_context(|| format!("inspect config {}", config_path.display()));
         }
     };
     args.apply_overrides(&mut cfg);
+    if args.check_config {
+        cfg.dry_run = true;
+        config::validate_and_normalize(&mut cfg)?;
+        output::print_success(
+            "Configuration is valid (directory write access is checked when moving).",
+        );
+        return Ok(());
+    }
     // Legacy environment switch, still documented for service files.
     cfg.disable_locks |= std::env::var_os("ARIA_MOVE_DISABLE_LOCKS").is_some_and(|v| v == "1");
     // A dry run logs to a file only when one is configured explicitly.

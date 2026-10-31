@@ -1,0 +1,68 @@
+.TH ARIA_MOVE 1 "October 2026" "aria_move 1.5.0" "User Commands"
+.SH NAME
+aria_move \- safely move completed aria2 downloads
+.SH SYNOPSIS
+.B aria_move
+.RI [ options ] " source"
+.br
+.B aria_move
+.RI [ options ] " gid num_files source"
+.SH DESCRIPTION
+Moves a completed file or download directory, preserving existing destinations.
+Uses atomic rename on one filesystem and verified copies across filesystems.
+Refuses symlinks and unfinished downloads.
+The Debian service runs aria2 under the aria-move account and invokes this
+executable directly on completion.
+.SH OPTIONS
+.TP
+.B --help
+Show all supported options.
+.TP
+.BI --config " PATH"
+Select configuration; overrides ARIA_MOVE_CONFIG and default paths.
+.TP
+.B --print-config
+Print the selected configuration path.
+.TP
+.B --check-config
+Validate configuration without creating storage directories or moving files.
+Does not test write access.
+.TP
+.B --init --download-base PATH --completed-base PATH
+Create configuration exclusively; never overwrites an existing file.
+.TP
+.B --dry-run
+Report a move without changing downloads.
+.TP
+.B --preserve-metadata
+Preserve permissions, timestamps and supported extended attributes when copying.
+.TP
+.B --preserve-permissions
+Preserve permissions when copying.
+.TP
+.B --disable-locks
+Disable concurrency protection for filesystems that cannot lock directories.
+.TP
+.B --json
+Emit structured logs.
+.SH FILES
+.TP
+.I /etc/aria_move/config.xml
+Packaged mover configuration.
+.TP
+.I /etc/aria_move/aria2.conf
+Packaged aria2 configuration.
+.TP
+.I /var/lib/aria-move
+Managed incoming/completed downloads, session and private RPC token.
+.TP
+.I /var/log/aria-move
+Move logs.
+.SH EXIT STATUS
+Zero on success; nonzero for invalid arguments, incomplete setup or move failure.
+.SH SEE ALSO
+.BR aria2c (1),
+.BR systemctl (1),
+.BR journalctl (1)
+.br
+/usr/share/doc/aria-move/INSTALLATION.md

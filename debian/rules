@@ -1,0 +1,21 @@
+#!/usr/bin/make -f
+%:
+	dh $@
+
+override_dh_auto_build:
+	cargo build --release --locked --all-features
+
+override_dh_auto_test:
+	cargo test --locked --all-features
+
+override_dh_auto_install:
+	install -D -m755 target/release/aria_move debian/aria-move/usr/bin/aria_move
+	install -D -m755 packaging/start-service debian/aria-move/usr/lib/aria-move/start-service
+	install -D -m644 packaging/config.xml debian/aria-move/etc/aria_move/config.xml
+	install -D -m644 packaging/aria2.conf debian/aria-move/etc/aria_move/aria2.conf
+
+override_dh_auto_clean:
+	rm -rf debian/aria-move
+
+override_dh_strip:
+	dh_strip --no-automatic-dbgsym

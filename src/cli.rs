@@ -42,6 +42,15 @@ pub struct Args {
     #[arg(long)]
     pub print_config: bool,
 
+    /// Validate configuration without moving downloads or creating directories.
+    #[arg(long, conflicts_with = "init")]
+    pub check_config: bool,
+
+    /// Create a ready-to-use config using --download-base and --completed-base.
+    /// Existing configuration is never overwritten.
+    #[arg(long, requires_all = ["download_base", "completed_base"], conflicts_with = "dry_run")]
+    pub init: bool,
+
     /// Show what would be moved without modifying anything.
     #[arg(long)]
     pub dry_run: bool,

@@ -1,0 +1,19 @@
+#!/bin/sh
+# Internal service launcher: keep generated credentials out of argv and conffiles.
+set -eu
+umask 077
+secret=/var/lib/aria-move/rpc-secret
+if [ ! -s "$secret" ]; then
+    temporary=$(mktemp /var/lib/aria-move/.rpc-secret.XXXXXX)
+    trap 'rm -f "$temporary"' EXIT HUP INT TERM
+    od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > "$temporary"
+    test "$(wc -c < "$temporary")" -eq 64 || {
+        echo 'aria-move: could not generate RPC credentials' >&2
+        exit 1
+    }
+    mv "$temporary" "$secret"
+    trap - EXIT HUP INT TERM
+fi
+cat /etc/aria_move/aria2.conf > /run/aria-move/aria2.conf
+printf '\nrpc-secret=%s\n' "$(cat "$secret")" >> /run/aria-move/aria2.conf
+exec /usr/bin/aria2c --conf-path=/run/aria-move/aria2.conf

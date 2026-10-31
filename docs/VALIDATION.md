@@ -50,6 +50,42 @@ It creates only a uniquely owned temporary subtree. Without the configured mount
 it reports a skip. Ordinary validation does not require ZFS or administrator access.
 macOS retains its native implementation; this pass adds no macOS test requirements.
 
+## Debian package lifecycle
+
+Build the package, then test it in an ephemeral systemd-nspawn guest. The host
+needs systemd-container and debootstrap. Create a clean rootfs once:
+
+```sh
+sudo debootstrap --include=systemd-sysv,dbus,python3,aria2,adduser trixie /var/tmp/aria-move-test-root https://deb.debian.org/debian
+sudo bash scripts/test-debian-package.sh ../aria-move_1.5.0_amd64.deb /var/tmp/aria-move-test-root
+lintian ../aria-move_1.5.0_amd64.deb
+```
+
+The runner boots a disposable copy, checks fresh installation and service-user
+permissions, downloads from a guest-local HTTP server over authenticated RPC,
+checks the actual completion hook, restarts, upgrades to a synthetic newer
+package version, checks modified conffiles and credentials, reboots the guest,
+and checks removal, reinstall, purge and reinstall after purge. It retains the
+boot log in a printed temporary directory. Package operations never run on the
+host. Network access is needed when preparing the rootfs; the guest has a private
+network namespace and all download tests use its localhost. Repeat using an
+ARM64 host/rootfs and ARM64 package before release.
+
+As a supplementary ARM64 runtime check on an x86_64 Debian host, install
+`gcc-aarch64-linux-gnu` and `qemu-user`, enable its binfmt registration, and run:
+
+```sh
+rustup target add aarch64-unknown-linux-gnu
+CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUNNER=qemu-aarch64 \
+QEMU_LD_PREFIX=/usr/aarch64-linux-gnu \
+  cargo test --locked --workspace --all-targets --all-features --target aarch64-unknown-linux-gnu
+```
+
+Run package checks on the oldest distribution you advertise. The local Debian
+13 amd64 build is not evidence of Debian 12 binary compatibility. A guest reboot
+tests systemd enablement and startup, but is not a physical machine reboot.
+
 Cross-compilation checks are optional supplements and do not substitute for runtime
 tests. Use `cargo check --locked --all-targets --all-features --target <triple>`
 after installing the relevant Rust target.

@@ -1,6 +1,4 @@
 FROM rust:1.99-bookworm
-WORKDIR /work
+RUN apt-get update && apt-get install -y --no-install-recommends debhelper dpkg-dev lintian && rm -rf /var/lib/apt/lists/*
 RUN rustup component add rustfmt clippy
-COPY Cargo.toml Cargo.lock ./
-RUN mkdir src && printf 'fn main(){}\n' > src/main.rs && touch src/lib.rs
-RUN cargo fetch --locked
+WORKDIR /work

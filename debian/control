@@ -1,0 +1,14 @@
+Source: aria-move
+Section: utils
+Priority: optional
+Maintainer: Dave <macg4dave@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13), cargo, rustc (>= 1.99), pkg-config
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://github.com/macg4dave/Aria_Move_Rust
+
+Package: aria-move
+Architecture: amd64 arm64
+Depends: ${shlibs:Depends}, ${misc:Depends}, aria2, adduser
+Description: Safely move completed aria2 downloads
+ Verified cross-filesystem moves and a managed, restricted aria2 service.

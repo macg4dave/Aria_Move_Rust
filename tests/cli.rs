@@ -6,6 +6,56 @@ use std::fs;
 use std::path::PathBuf;
 
 #[test]
+fn init_and_check_are_safe_and_work_with_xml_characters() {
+    let fx = Fixture::new();
+    let config = fx.root.join("new/config.xml");
+    let incoming = fx.root.join("in & out");
+    let completed = fx.root.join("done");
+    let output = fx
+        .command()
+        .arg("--config")
+        .arg(&config)
+        .arg("--init")
+        .arg("--preserve-permissions")
+        .arg("--disable-locks")
+        .arg("--download-base")
+        .arg(&incoming)
+        .arg("--completed-base")
+        .arg(&completed)
+        .output()
+        .unwrap();
+    assert_success(&output);
+    assert!(!incoming.exists() && !completed.exists());
+    let before = fs::read(&config).unwrap();
+    assert!(String::from_utf8_lossy(&before).contains("&amp;"));
+    let saved = aria_move::config::load_config(&config).unwrap();
+    assert!(saved.preserve_permissions && saved.disable_locks);
+    assert_success(
+        &fx.command()
+            .arg("--config")
+            .arg(&config)
+            .arg("--check-config")
+            .output()
+            .unwrap(),
+    );
+    assert!(!incoming.exists() && !completed.exists());
+    assert_failure(
+        &fx.command()
+            .arg("--config")
+            .arg(&config)
+            .arg("--init")
+            .arg("--download-base")
+            .arg(&incoming)
+            .arg("--completed-base")
+            .arg(&completed)
+            .output()
+            .unwrap(),
+        "never overwritten",
+    );
+    assert_eq!(fs::read(config).unwrap(), before);
+}
+
+#[test]
 fn aria2_hook_arguments_move_files_and_directories() {
     let fx = Fixture::new();
     let file = fx.file("ok.bin", b"content");
@@ -201,7 +251,7 @@ fn first_run_writes_a_template_that_must_be_edited() {
         .arg(&file)
         .output()
         .unwrap();
-    assert_success(&output);
+    assert_failure(&output, "Setup required");
     assert!(stdout(&output).contains("template config was written"));
     assert!(file.exists(), "the first run never moves anything");
     let template = fs::read_to_string(&config).unwrap();
