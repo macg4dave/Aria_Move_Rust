@@ -1,3 +1,12 @@
+aria-move (1.5.1) unstable; urgency=medium
+
+  * Rework logging: application errors always go to the system log; the log
+    file level selects warnings/errors, completed moves or everything.
+  * Generate the RPC secret at install time and make it the only token source.
+  * Add RPM packaging for RHEL/Alma/Rocky 9+ and Fedora.
+
+ -- Dave <macg4dave@users.noreply.github.com>  Sat, 31 Oct 2026 18:00:00 +0000
+
 aria-move (1.5.0) unstable; urgency=medium
 
   * Native Debian packaging and managed aria2 integration.

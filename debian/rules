@@ -11,6 +11,7 @@ override_dh_auto_test:
 override_dh_auto_install:
 	install -D -m755 target/release/aria_move debian/aria-move/usr/bin/aria_move
 	install -D -m755 packaging/start-service debian/aria-move/usr/lib/aria-move/start-service
+	install -D -m755 packaging/prepare-state debian/aria-move/usr/lib/aria-move/prepare-state
 	install -D -m644 packaging/config.xml debian/aria-move/etc/aria_move/config.xml
 	install -D -m644 packaging/aria2.conf debian/aria-move/etc/aria_move/aria2.conf
 

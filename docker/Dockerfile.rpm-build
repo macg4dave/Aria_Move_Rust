@@ -1,0 +1,6 @@
+# AlmaLinux 9 sets the RPM glibc baseline (2.34): RHEL/Rocky/Alma 9+ and Fedora.
+FROM almalinux:9
+RUN dnf install -y rpm-build gcc systemd-rpm-macros tar gzip && dnf clean all
+ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:$PATH
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.99 && rustc --version
+WORKDIR /work

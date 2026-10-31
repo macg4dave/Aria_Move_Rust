@@ -4,24 +4,7 @@ if [ "$1" = configure ]; then
     if ! getent passwd aria-move >/dev/null; then
         adduser --system --group --home /var/lib/aria-move --no-create-home aria-move
     fi
-    install -d -o aria-move -g aria-move -m 0750 /var/lib/aria-move /var/log/aria-move
-    install -d -o aria-move -g aria-move -m 0750 /var/lib/aria-move/incoming /var/lib/aria-move/completed
-    if [ ! -e /var/lib/aria-move/aria2.session ]; then
-        install -o aria-move -g aria-move -m 0640 /dev/null /var/lib/aria-move/aria2.session
-    fi
-    # Generate the RPC token on this machine; it is never shipped in the package.
-    if [ ! -s /var/lib/aria-move/rpc-secret ]; then
-        secret=$(mktemp /var/lib/aria-move/.rpc-secret.XXXXXX)
-        od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > "$secret"
-        if [ "$(wc -c < "$secret")" -ne 64 ]; then
-            rm -f "$secret"
-            echo 'aria-move: could not generate RPC credentials' >&2
-            exit 1
-        fi
-        chown aria-move:aria-move "$secret"
-        chmod 0600 "$secret"
-        mv "$secret" /var/lib/aria-move/rpc-secret
-    fi
+    /usr/lib/aria-move/prepare-state
 fi
 #DEBHELPER#
 if [ "$1" = configure ]; then

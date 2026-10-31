@@ -1,7 +1,7 @@
 # Local release packaging
 
-Version 1.5 is represented as 1.5.0 in Cargo and Debian metadata.
-Targets: Linux amd64/arm64 and Windows x86_64.
+Versions use three parts (for example 1.5.1) in Cargo, Debian and RPM metadata.
+Targets: Linux amd64/arm64 (`.deb` and `.rpm`) and Windows x86_64.
 
 ## Docker release gate
 
@@ -36,10 +36,10 @@ The networked check defaults to `https://deb.debian.org/debian/README`; set
 the gate. Logs, package checksums and architecture PASS markers are written to
 `target/release-check`. Publish these exact `.deb` files, without rebuilding them.
 
-For every release, run this gate plus `pwsh -File scripts/package-windows-release.ps1`
+For every release, run this gate, the RPM gate below and `pwsh -File scripts/package-windows-release.ps1`
 on Windows to test and archive the executable with README, docs and LICENSE. Create
 `SHA256SUMS` covering every uploaded artifact. Commit the source, tag that commit
-as `vVERSION` (for version 1.5 use `v1.5.0`), push it, then create the GitHub
+as `vVERSION` (for example `v1.5.1`), push it, then create the GitHub
 release with the tested artifacts and an honest test/compatibility summary.
 The gate does not upload, tag, or publish anything itself. No CI is required.
 
@@ -56,8 +56,21 @@ Build ARM64 natively or with an ARM64 container and working emulation.
 dh_shlibdeps calculates actual binary dependencies. Packages built on newer
 distributions must not be advertised as supporting older glibc versions.
 
-This replaces the hand-written DEB/RPM builder and unconfigured cargo-deb path.
-The helper no longer produces RPMs; native RPM lifecycle support is not supplied.
+## RPM release gate
+
+```bash
+bash scripts/docker-rpm-check.sh                 # x86_64 and aarch64
+bash scripts/docker-rpm-check.sh x86_64          # one architecture
+```
+
+Builds `aria-move-VERSION-1.el9.ARCH.rpm` from `packaging/rpm/aria-move.spec` on
+AlmaLinux 9 (glibc 2.34 baseline), running the Rust tests in `%check`. Each RPM is
+then installed in a disposable AlmaLinux 9 systemd container with EPEL aria2 and
+checked by `tests/packaging/rpm-lifecycle.sh`: install (service left disabled, as
+is RPM convention), enable, authenticated offline and HTTPS downloads through the
+hook, crash restart, invalid-config recovery, upgrade with an edited conffile,
+container restart, remove (data and token kept) and reinstall. Publish these
+exact `.rpm` files from `target/release-check`.
 Run `scripts/test-debian-package.sh` as described in [VALIDATION.md](VALIDATION.md)
 before publishing each architecture.
 

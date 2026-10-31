@@ -1,6 +1,9 @@
 # Installation details
 
 Debian owns the binary, systemd unit and two dpkg conffiles in /etc/aria_move.
+The RPM installs the same files (launcher in /usr/libexec/aria-move, configs as
+`%config(noreplace)`), but leaves the service disabled until
+`sudo systemctl enable --now aria-move`; aria2 comes from EPEL on RHEL-family systems.
 debhelper generates enable/start, upgrade restart, stop/removal and daemon-reload
 actions. Installation never prompts for application setup. aria2 invokes the
 mover directly with its three completion arguments; no scanning daemon is used.

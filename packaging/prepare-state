@@ -1,0 +1,23 @@
+#!/bin/sh
+# Package install helper (Debian postinst and RPM %post): create the service
+# state that must exist before first start. Runs as root; never replaces data.
+set -eu
+state=/var/lib/aria-move
+install -d -o aria-move -g aria-move -m 0750 "$state" /var/log/aria-move
+install -d -o aria-move -g aria-move -m 0750 "$state/incoming" "$state/completed"
+if [ ! -e "$state/aria2.session" ]; then
+    install -o aria-move -g aria-move -m 0640 /dev/null "$state/aria2.session"
+fi
+# Generate the RPC token on this machine; it is never shipped in the package.
+if [ ! -s "$state/rpc-secret" ]; then
+    secret=$(mktemp "$state/.rpc-secret.XXXXXX")
+    od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > "$secret"
+    if [ "$(wc -c < "$secret")" -ne 64 ]; then
+        rm -f "$secret"
+        echo 'aria-move: could not generate RPC credentials' >&2
+        exit 1
+    fi
+    chown aria-move:aria-move "$secret"
+    chmod 0600 "$secret"
+    mv "$secret" "$state/rpc-secret"
+fi

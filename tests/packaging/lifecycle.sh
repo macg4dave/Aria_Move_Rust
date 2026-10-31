@@ -5,6 +5,13 @@ test "$(id -u)" = 0
 case $(cat /run/systemd/container) in systemd-nspawn|docker) ;; *) exit 2;; esac
 export DEBIAN_FRONTEND=noninteractive
 package=/packages/package.deb
+# `! cmd` never fails under set -e, so negative checks use this instead.
+refute() {
+    if "$@"; then
+        echo "Unexpected success: $*" >&2
+        exit 1
+    fi
+}
 boot_identity() {
     cat /proc/sys/kernel/random/boot_id
     awk '{print $22}' /proc/1/stat
@@ -26,7 +33,7 @@ active() {
 }
 case ${1:?expected before-reboot or after-reboot} in
 before-reboot)
-    ! dpkg-query -W -f='${Status}' aria-move 2>/dev/null | grep -q 'install ok installed'
+    if dpkg-query -W -f='${Status}' aria-move 2>/dev/null | grep -q 'install ok installed'; then exit 1; fi
     apt-get install -y "$package" python3
     active
     systemctl is-enabled --quiet aria-move
@@ -92,8 +99,8 @@ UNIT
     systemctl daemon-reload
     systemctl enable --now aria2-existing
     apt-get install --reinstall -y /root/upgrade.deb
-    ! systemctl is-enabled --quiet aria-move
-    ! systemctl is-active --quiet aria-move
+    refute systemctl is-enabled --quiet aria-move
+    refute systemctl is-active --quiet aria-move
     systemctl is-active --quiet aria2-existing
     sha256sum -c /root/config.sha256
     cmp /root/original-secret /var/lib/aria-move/rpc-secret
@@ -104,8 +111,8 @@ UNIT
     systemctl enable --now aria-move
     active
     apt-get remove -y aria-move
-    ! systemctl is-active --quiet aria-move
-    ! systemctl is-enabled --quiet aria-move
+    refute systemctl is-active --quiet aria-move
+    refute systemctl is-enabled --quiet aria-move
     test -f /etc/aria_move/config.xml
     test -f /var/lib/aria-move/completed/retained.txt
     apt-get install -y "$package"

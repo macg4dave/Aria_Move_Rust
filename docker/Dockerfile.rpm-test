@@ -1,0 +1,7 @@
+FROM almalinux:9
+ENV container=docker
+# aria2 comes from EPEL on RHEL-family systems.
+RUN dnf install -y epel-release && dnf install -y systemd aria2 python3 procps-ng diffutils && dnf clean all
+RUN systemctl mask systemd-binfmt.service proc-sys-fs-binfmt_misc.automount systemd-sysctl.service
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

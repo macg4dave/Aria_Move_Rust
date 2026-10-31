@@ -1,10 +1,10 @@
 # Aria Move
 
-Aria Move is a small companion for [aria2](https://aria2.github.io/), the download manager. Once aria2 finishes a download, it tells Aria Move to move it into your **completed** folder. You can run both together on a Debian or Ubuntu home server, or connect Aria Move to an aria2 installation you already have.
+Aria Move is a small companion for [aria2](https://aria2.github.io/), the download manager. Once aria2 finishes a download, it tells Aria Move to move it into your **completed** folder. You can run both together on a Debian, Ubuntu, Fedora or RHEL-family home server, or connect Aria Move to an aria2 installation you already have.
 
 
 
-**Quick links:** [Install](#install-on-debian-or-ubuntu) · [Connect a web UI](#connect-a-web-interface) · [Change folders](#use-your-own-download-folders) · [Windows](#windows) · [Fix a problem](#troubleshooting)
+**Quick links:** [Install](#install-on-debian-or-ubuntu) · [Fedora/RHEL](#install-on-fedora-rhel-almalinux-or-rocky-linux) · [Connect a web UI](#connect-a-web-interface) · [Change folders](#use-your-own-download-folders) · [Windows](#windows) · [Fix a problem](#troubleshooting)
 
 ## What makes it useful?
 
@@ -14,7 +14,7 @@ Aria Move is a small companion for [aria2](https://aria2.github.io/), the downlo
 - **Home-server friendly:** the Debian package installs aria2 and sets up a systemd service, including a restricted account.
 - **Test before moving:** a dry-run option shows what would happen without touching the files.
 
-**Supported builds:** Linux x86-64 (`amd64`), Linux ARM64 (`arm64`) and Windows x86-64.
+**Supported builds:** Linux x86-64 and ARM64 (`.deb` and `.rpm`) and Windows x86-64.
 
 ## Install on Debian or Ubuntu
 
@@ -43,7 +43,7 @@ Open a terminal in the folder containing the downloaded `.deb` file. For example
 
 ```bash
 cd ~/Downloads
-sudo apt install ./aria-move_1.5.0_amd64.deb
+sudo apt install ./aria-move_1.5.1_amd64.deb
 ```
 
 The package installs aria2 as needed, creates its own service account and configures the automatic completion hook. You do **not** need to write a service file or a shell script.
@@ -75,6 +75,30 @@ That's the basic installation done. On the standard package setup, files go here
 | Move activity log     | `/var/log/aria-move/aria_move.log` |
 
 **Tip:** You can leave these defaults in place to get started and change the storage location later.
+
+## Install on Fedora, RHEL, AlmaLinux or Rocky Linux
+
+The `.rpm` packages set up the same service as the Debian package: a restricted `aria-move` account, `aria-move.service`, authenticated localhost RPC and the completion hook. They need glibc 2.34 or newer (RHEL/AlmaLinux/Rocky 9+ or a current Fedora).
+
+| Your machine                     | Package ending  |
+| -------------------------------- | --------------- |
+| Typical Intel/AMD PC or server   | `.x86_64.rpm`   |
+| 64-bit ARM machine               | `.aarch64.rpm`  |
+
+Run `uname -m` if unsure. On RHEL, AlmaLinux and Rocky Linux, aria2 comes from EPEL, so enable it first (Fedora already has aria2):
+
+```bash
+sudo dnf install epel-release        # RHEL-family only
+sudo dnf install ./aria-move-1.5.1-1.el9.x86_64.rpm
+```
+
+As usual for RPM packages, the service is installed but not started. Start it and enable it at boot:
+
+```bash
+sudo systemctl enable --now aria-move
+```
+
+Everything else in this guide (folders, web UI, token, commands) is the same as on Debian. To update, install the newer `.rpm` with `sudo dnf install ./FILE.rpm`; your edited settings in `/etc/aria_move` are kept. `sudo dnf remove aria-move` keeps your downloads, token and logs.
 
 ## Connect a web interface
 
@@ -400,7 +424,7 @@ The compiled Linux executable is in `target/release/aria_move`. Set up a standal
   --completed-base /home/your-user/Downloads/completed
 ```
 
-Run `./target/release/aria_move --check-config`, then configure your existing aria2 to use the full path to that executable as its `on-download-complete` hook. A source build does **not** automatically set up the Debian package's systemd service or RPC server.
+Run `./target/release/aria_move --check-config`, then configure your existing aria2 to use the full path to that executable as its `on-download-complete` hook. A source build does **not** automatically set up the packaged systemd service or RPC server.
 
 ## Updates and removal
 
