@@ -25,7 +25,7 @@ const TEMPLATE: &str = "\
 <config>
   <download_base>/path/to/incoming</download_base>
   <completed_base>/path/to/completed</completed_base>
-  <log_level>normal</log_level>
+  <log_level>warn</log_level>
   <log_file></log_file>
   <preserve_metadata>false</preserve_metadata>
   <preserve_permissions>false</preserve_permissions>
@@ -158,7 +158,7 @@ mod tests {
             Config {
                 download_base: "/in".into(),
                 completed_base: "/out".into(),
-                log_level: LogLevel::Info,
+                log_level: LogLevel::Verbose,
                 log_file: Some("/var/log/aria_move.log".into()),
                 dry_run: false,
                 preserve_metadata: true,

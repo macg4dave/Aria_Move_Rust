@@ -30,11 +30,12 @@ pub struct Args {
     #[arg(long, value_hint = ValueHint::DirPath)]
     pub completed_base: Option<PathBuf>,
 
-    /// Shorthand for --log-level debug.
+    /// Shorthand for --log-level verbose.
     #[arg(short = 'd', long)]
     pub debug: bool,
 
-    /// Log level: quiet, normal, info or debug.
+    /// File log: warn (default; errors), normal (moves and errors), or verbose (everything).
+    /// Application errors always go to the system log.
     #[arg(long, value_name = "LEVEL")]
     pub log_level: Option<LogLevel>,
 
@@ -67,7 +68,7 @@ pub struct Args {
     #[arg(long)]
     pub disable_locks: bool,
 
-    /// Emit structured JSON logs.
+    /// Write the log file as JSON lines.
     #[arg(long)]
     pub json: bool,
 
@@ -94,7 +95,7 @@ impl Args {
     /// `--debug` wins over `--log-level`.
     pub fn effective_log_level(&self) -> Option<LogLevel> {
         if self.debug {
-            Some(LogLevel::Debug)
+            Some(LogLevel::Verbose)
         } else {
             self.log_level
         }
@@ -152,11 +153,11 @@ mod tests {
     fn log_level_flags() {
         assert_eq!(
             parse(&["--debug", "--log-level", "quiet"]).effective_log_level(),
-            Some(LogLevel::Debug)
+            Some(LogLevel::Verbose)
         );
         assert_eq!(
             parse(&["--log-level", "VERBOSE"]).effective_log_level(),
-            Some(LogLevel::Info)
+            Some(LogLevel::Verbose)
         );
         assert_eq!(parse(&[]).effective_log_level(), None);
         assert!(Args::try_parse_from(["aria_move", "--log-level", "loud"]).is_err());
@@ -198,7 +199,7 @@ mod tests {
             Config {
                 download_base: "/db".into(),
                 completed_base: "/cb".into(),
-                log_level: LogLevel::Info,
+                log_level: LogLevel::Verbose,
                 log_file: None,
                 dry_run: true,
                 preserve_metadata: true,

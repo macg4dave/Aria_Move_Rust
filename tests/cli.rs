@@ -322,9 +322,10 @@ fn dry_runs_write_nothing_at_all() {
 fn json_logs_are_one_object_per_line() {
     let fx = Fixture::new();
     let file = fx.file("file", b"keep");
-    let output = fx.run(&[&"--json", &"--dry-run", &file]);
+    let output = fx.run(&[&"--json", &"--log-level", &"debug", &file]);
     assert_success(&output);
-    let text = stdout(&output);
+    assert!(stdout(&output).is_empty(), "{}", stdout(&output));
+    let text = fs::read_to_string(fx.root.join("aria_move.log")).unwrap();
     assert!(text.contains("Move completed"), "{text}");
     for line in text.lines() {
         let value: serde_json::Value = serde_json::from_str(line).unwrap();
@@ -336,7 +337,7 @@ fn json_logs_are_one_object_per_line() {
 fn logs_default_beside_the_config_or_to_an_explicit_file() {
     let fx = Fixture::new();
     let file = fx.file("one", b"1");
-    assert_success(&fx.run(&[&file]));
+    assert_success(&fx.run(&[&"--log-level", &"normal", &file]));
     let log = fs::read_to_string(fx.root.join("aria_move.log")).unwrap();
     assert!(log.contains("Move completed"), "{log}");
 
@@ -468,7 +469,6 @@ mod unix {
 
     #[test]
     fn sigterm_interrupts_a_wait_for_a_lock() {
-        use std::io::{BufRead, BufReader};
         use std::process::Stdio;
         use std::time::{Duration, Instant};
         let fx = Fixture::new();
@@ -478,20 +478,23 @@ mod unix {
             .command()
             .args(["--debug", "--json"])
             .arg(&source)
-            .stdout(Stdio::piped())
+            .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let (sender, receiver) = std::sync::mpsc::channel();
-        let reader = std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines() {
-                if line.unwrap().contains("Waiting for source lock") {
-                    let _ = sender.send(());
-                }
+        // Diagnostics go only to the verbose log file beside the config.
+        let log = fx.root.join("aria_move.log");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let waiting = loop {
+            let text = fs::read_to_string(&log).unwrap_or_default();
+            if text.contains("Waiting for source lock") {
+                break true;
             }
-        });
-        let waiting = receiver.recv_timeout(Duration::from_secs(10)).is_ok();
+            if Instant::now() >= deadline {
+                break false;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
         if waiting {
             // SAFETY: signals only our own live child, whose handler catches SIGTERM.
             assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGTERM) }, 0);
@@ -507,7 +510,6 @@ mod unix {
             }
             std::thread::sleep(Duration::from_millis(10));
         };
-        reader.join().unwrap();
         drop(held);
         assert!(waiting, "the child never reached the lock wait");
         assert_eq!(status.code(), Some(1), "SIGTERM must be handled, not fatal");
@@ -536,4 +538,56 @@ fn nested_single_files_and_explicit_overrides_leave_siblings_untouched() {
         assert!(!file.exists());
         assert!(!fx.completed.join("category").exists());
     }
+}
+
+#[test]
+fn file_log_levels_select_moves_and_errors() {
+    let fx = Fixture::new();
+    let log = || fs::read_to_string(fx.root.join("aria_move.log")).unwrap_or_default();
+
+    // warn (default): errors only, so a success leaves no record at all.
+    let output = fx.run(&[&fx.file("quiet-success", b"x")]);
+    assert_success(&output);
+    assert!(stdout(&output).is_empty(), "{}", stdout(&output));
+    assert!(
+        common::stderr(&output).is_empty(),
+        "{}",
+        common::stderr(&output)
+    );
+    assert!(!log().contains("quiet-success"), "{}", log());
+
+    // normal: completed moves, without diagnostics.
+    assert_success(&fx.run(&[&"--log-level", &"normal", &fx.file("normal-move", b"x")]));
+    let text = log();
+    assert!(
+        text.contains("Move completed") && text.contains("normal-move"),
+        "{text}"
+    );
+    assert!(!text.contains("moved by rename"), "{text}");
+
+    // verbose: everything, including diagnostics.
+    assert_success(&fx.run(&[&"--log-level", &"verbose", &fx.file("verbose-move", b"x")]));
+    assert!(log().contains("moved by rename"), "{}", log());
+
+    // Errors reach the file at every level and the console (system output).
+    let output = fx.run(&[&fx.download.join("missing")]);
+    assert_failure(&output, "Source path not found");
+    assert!(log().contains("Move failed"), "{}", log());
+}
+
+#[test]
+fn early_and_log_file_errors_still_reach_the_system_output() {
+    let fx = Fixture::new();
+    let blocked = fx.root.join("blocked.log");
+    fs::create_dir(&blocked).unwrap();
+    let escaped = quick_xml::escape::escape(blocked.to_str().unwrap()).into_owned();
+    fx.write_config(&format!("<log_file>{escaped}</log_file>"));
+    let output = fx.run(&[&fx.file("moved", b"payload")]);
+    assert_success(&output);
+    assert!(common::stderr(&output).contains("Cannot open log file"));
+    assert!(fx.completed.join("moved").exists());
+
+    fx.write_config("<log_level>loud</log_level>");
+    let output = fx.run(&[&fx.file("kept", b"payload")]);
+    assert_failure(&output, "invalid log level");
 }

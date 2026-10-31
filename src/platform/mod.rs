@@ -16,7 +16,9 @@ mod windows;
 #[cfg(windows)]
 use windows as sys;
 
-pub(crate) use sys::{file_identity, free_space, is_link, sync_directory, try_lock_source};
+pub(crate) use sys::{
+    file_identity, free_space, is_link, sync_directory, system_log, try_lock_source,
+};
 
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, Write};

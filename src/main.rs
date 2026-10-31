@@ -5,9 +5,14 @@ use aria_move::{config, errors, logging, output, shutdown};
 use clap::Parser;
 
 fn main() {
+    logging::install_panic_hook();
     if let Err(error) = run(Args::parse()) {
         // Include causes so an actionable OS error is not hidden by context.
-        output::print_error(&format!("{error:#}"));
+        // Before the config is loaded this reaches the system log only.
+        logging::error(&format!(
+            "Move failed ({}): {error:#}",
+            errors::error_code(&error)
+        ));
         std::process::exit(1);
     }
 }
@@ -69,14 +74,10 @@ fn run(args: Args) -> Result<()> {
         None if !cfg.dry_run => config::default_log_path(&config_path),
         None => None,
     };
-    let _guard = logging::init(cfg.log_level, log_file.as_deref(), args.json)?;
+    logging::init(cfg.log_level, log_file.as_deref(), args.json)?;
     ctrlc::set_handler(shutdown::request).context("install signal handler")?;
 
-    let result = execute(&args, &mut cfg);
-    if let Err(error) = &result {
-        tracing::error!(code = errors::error_code(error), error = ?error, "Move failed");
-    }
-    result
+    execute(&args, &mut cfg)
 }
 
 fn execute(args: &Args, cfg: &mut config::Config) -> Result<()> {
@@ -94,6 +95,6 @@ fn execute(args: &Args, cfg: &mut config::Config) -> Result<()> {
             dest.display()
         ));
     }
-    tracing::info!(source = %src.display(), dest = %dest.display(), dry_run = cfg.dry_run, "Move completed");
+    tracing::info!(target: logging::COMPLETION, source = %src.display(), dest = %dest.display(), dry_run = cfg.dry_run, "Move completed");
     Ok(())
 }

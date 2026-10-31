@@ -2,5 +2,5 @@
   <download_base>/var/lib/aria-move/incoming</download_base>
   <completed_base>/var/lib/aria-move/completed</completed_base>
   <log_file>/var/log/aria-move/aria_move.log</log_file>
-  <log_level>normal</log_level>
+  <log_level>warn</log_level>
 </config>

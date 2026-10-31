@@ -1,9 +1,13 @@
 #!/bin/sh
 # Internal service launcher: keep generated credentials out of argv and conffiles.
+# The RPC secret lives only in /var/lib/aria-move/rpc-secret (created at install,
+# or here if missing) and is merged into a private runtime copy of aria2.conf.
 set -eu
 umask 077
-secret=/var/lib/aria-move/rpc-secret
-if [ ! -s "$secret" ]; then
+config=/etc/aria_move/aria2.conf
+runtime=/run/aria-move/aria2.conf
+secret_file=/var/lib/aria-move/rpc-secret
+if [ ! -s "$secret_file" ]; then
     temporary=$(mktemp /var/lib/aria-move/.rpc-secret.XXXXXX)
     trap 'rm -f "$temporary"' EXIT HUP INT TERM
     od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > "$temporary"
@@ -11,9 +15,25 @@ if [ ! -s "$secret" ]; then
         echo 'aria-move: could not generate RPC credentials' >&2
         exit 1
     }
-    mv "$temporary" "$secret"
+    mv "$temporary" "$secret_file"
     trap - EXIT HUP INT TERM
 fi
-cat /etc/aria_move/aria2.conf > /run/aria-move/aria2.conf
-printf '\nrpc-secret=%s\n' "$(cat "$secret")" >> /run/aria-move/aria2.conf
-exec /usr/bin/aria2c --conf-path=/run/aria-move/aria2.conf
+# Trailing newlines are dropped; anything else that would break the conf line is refused.
+secret=$(cat "$secret_file")
+case $secret in
+'' | *[[:space:]]*)
+    echo "aria-move: $secret_file must hold one token without spaces" >&2
+    exit 1
+    ;;
+esac
+# The secret file is the only source of the token.
+secret_line='^[[:space:]]*rpc-secret[[:space:]]*='
+if grep -Eq "$secret_line" "$config"; then
+    echo "aria-move: ignoring rpc-secret in $config; using $secret_file" >&2
+fi
+{
+    sed -E "/$secret_line/d" "$config"
+    printf '\nrpc-secret=%s\n' "$secret"
+} > "$runtime.tmp"
+mv "$runtime.tmp" "$runtime"
+exec /usr/bin/aria2c --conf-path="$runtime"

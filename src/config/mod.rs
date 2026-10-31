@@ -14,28 +14,13 @@ pub use xml::{create_template_config, load_config};
 /// Verbosity exposed to users and config files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LogLevel {
-    /// Errors only.
-    Quiet,
-    /// Informational output.
+    /// File log: warnings and errors only.
     #[default]
+    Warn,
+    /// File log: completed moves, warnings and errors.
     Normal,
-    /// Verbose output.
-    Info,
-    /// Everything, including traces.
-    Debug,
-}
-
-impl LogLevel {
-    /// The tracing threshold for this level.
-    pub fn filter(self) -> tracing::level_filters::LevelFilter {
-        use tracing::level_filters::LevelFilter;
-        match self {
-            Self::Quiet => LevelFilter::ERROR,
-            Self::Normal => LevelFilter::INFO,
-            Self::Info => LevelFilter::DEBUG,
-            Self::Debug => LevelFilter::TRACE,
-        }
-    }
+    /// File log: everything.
+    Verbose,
 }
 
 impl FromStr for LogLevel {
@@ -44,12 +29,11 @@ impl FromStr for LogLevel {
     /// Case-insensitive, with common aliases.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
-            "quiet" | "error" | "none" => Ok(Self::Quiet),
+            "quiet" | "error" | "none" | "warn" | "warning" => Ok(Self::Warn),
             "normal" => Ok(Self::Normal),
-            "info" | "verbose" | "detailed" => Ok(Self::Info),
-            "debug" | "trace" => Ok(Self::Debug),
+            "info" | "verbose" | "detailed" | "debug" | "trace" => Ok(Self::Verbose),
             _ => Err(format!(
-                "invalid log level '{s}' (expected quiet, normal, info or debug)"
+                "invalid log level '{s}' (expected warn, normal or verbose)"
             )),
         }
     }
@@ -58,10 +42,9 @@ impl FromStr for LogLevel {
 impl fmt::Display for LogLevel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::Quiet => "quiet",
+            Self::Warn => "warn",
             Self::Normal => "normal",
-            Self::Info => "info",
-            Self::Debug => "debug",
+            Self::Verbose => "verbose",
         })
     }
 }
@@ -157,15 +140,17 @@ mod tests {
     #[test]
     fn log_level_parsing_aliases_and_round_trip() {
         let cases = [
-            ("quiet", LogLevel::Quiet),
-            ("ERROR", LogLevel::Quiet),
-            ("none", LogLevel::Quiet),
+            ("quiet", LogLevel::Warn),
+            ("ERROR", LogLevel::Warn),
+            ("none", LogLevel::Warn),
+            ("warn", LogLevel::Warn),
+            ("WARNING", LogLevel::Warn),
             ("Normal", LogLevel::Normal),
-            ("info", LogLevel::Info),
-            ("verbose", LogLevel::Info),
-            ("detailed", LogLevel::Info),
-            ("DEBUG", LogLevel::Debug),
-            ("trace", LogLevel::Debug),
+            ("info", LogLevel::Verbose),
+            ("verbose", LogLevel::Verbose),
+            ("detailed", LogLevel::Verbose),
+            ("DEBUG", LogLevel::Verbose),
+            ("trace", LogLevel::Verbose),
         ];
         for (text, level) in cases {
             assert_eq!(text.parse::<LogLevel>(), Ok(level), "{text}");

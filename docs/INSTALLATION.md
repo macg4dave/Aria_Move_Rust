@@ -7,11 +7,20 @@ mover directly with its three completion arguments; no scanning daemon is used.
 
 ## RPC clients
 
-RPC is enabled on localhost by default, with a random token generated at first
-service start. Read it with `sudo cat /var/lib/aria-move/rpc-secret` and enter it
-in your aria2 client. The token persists across upgrades and reinstalls. The
-internal launcher creates a private runtime config; it appends this token after
-the package configuration, so do not set `rpc-secret` in aria2.conf.
+RPC is enabled on localhost by default, with a random token generated on this
+machine at install time. Read it with `sudo cat /var/lib/aria-move/rpc-secret` and
+enter it in your aria2 client. The token persists across upgrades and reinstalls.
+At every start the internal launcher writes a private runtime copy of aria2.conf
+with this token appended, so the token never appears in the package, a conffile
+or a process command line. Any `rpc-secret` line in aria2.conf is ignored.
+
+To use your own token, write it as a single line without spaces and restart:
+
+```bash
+sudo install -o aria-move -g aria-move -m 0600 /dev/null /var/lib/aria-move/rpc-secret
+printf '%s\n' 'your-token' | sudo tee /var/lib/aria-move/rpc-secret > /dev/null
+sudo systemctl restart aria-move
+```
 
 For a command-line download (requires curl), replace the example URL:
 

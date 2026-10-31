@@ -50,8 +50,16 @@ Preserve permissions when copying.
 .B --disable-locks
 Disable per-download locks for filesystems without lock support.
 .TP
+.BI --log-level " LEVEL"
+Log file contents: warn (default; warnings and errors), normal (completed moves,
+warnings and errors) or verbose (everything).
+.TP
 .B --json
-Emit structured logs.
+Write the log file as JSON lines.
+.SH LOGGING
+Application warnings, errors and crashes always go to the system log
+(syslog, identifier aria_move; view with journalctl -t aria_move) and stderr,
+whatever the log level. The log file receives only what the log level selects.
 .SH FILES
 .TP
 .I /etc/aria_move/config.xml

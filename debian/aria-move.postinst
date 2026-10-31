@@ -9,12 +9,25 @@ if [ "$1" = configure ]; then
     if [ ! -e /var/lib/aria-move/aria2.session ]; then
         install -o aria-move -g aria-move -m 0640 /dev/null /var/lib/aria-move/aria2.session
     fi
+    # Generate the RPC token on this machine; it is never shipped in the package.
+    if [ ! -s /var/lib/aria-move/rpc-secret ]; then
+        secret=$(mktemp /var/lib/aria-move/.rpc-secret.XXXXXX)
+        od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > "$secret"
+        if [ "$(wc -c < "$secret")" -ne 64 ]; then
+            rm -f "$secret"
+            echo 'aria-move: could not generate RPC credentials' >&2
+            exit 1
+        fi
+        chown aria-move:aria-move "$secret"
+        chmod 0600 "$secret"
+        mv "$secret" /var/lib/aria-move/rpc-secret
+    fi
 fi
 #DEBHELPER#
 if [ "$1" = configure ]; then
     echo 'Aria Move installed. Mover configuration: /etc/aria_move/config.xml.'
     echo 'Bundled service: systemctl status aria-move. When started, its default RPC endpoint is localhost:6800.'
-    echo 'Bundled RPC token after startup: sudo cat /var/lib/aria-move/rpc-secret.'
+    echo 'Bundled RPC token: sudo cat /var/lib/aria-move/rpc-secret.'
     echo 'If using your own aria2 service, keep the bundled service disabled and manage your existing service instead.'
     echo 'Setup and troubleshooting: /usr/share/doc/aria-move/INSTALLATION.md.'
 fi

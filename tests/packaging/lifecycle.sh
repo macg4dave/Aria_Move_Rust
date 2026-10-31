@@ -33,6 +33,8 @@ before-reboot)
     runuser -u aria-move -- aria_move --check-config
     test "$(stat -c %U /var/lib/aria-move/incoming)" = aria-move
     test "$(stat -c %a /var/lib/aria-move/rpc-secret)" = 600
+    test "$(stat -c %a /run/aria-move/aria2.conf)" = 600
+    test "$(grep -c '^rpc-secret=' /run/aria-move/aria2.conf)" = 1
     test "$(systemctl show -p User --value aria-move)" = aria-move
     download
     systemctl kill --kill-whom=main --signal=KILL aria-move

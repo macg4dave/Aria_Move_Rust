@@ -1,16 +1,22 @@
 //! Native primitives for Windows. POSIX modes have no equivalent here; only
 //! the read-only attribute is meaningful.
+use crate::logging::Severity;
 use std::fs::{self, DirBuilder, File, Metadata, OpenOptions};
 use std::io;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
+use std::ptr;
 use windows_sys::Win32::Foundation::{ERROR_SHARING_VIOLATION, GENERIC_READ, GENERIC_WRITE};
 use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, DELETE, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_REPARSE_POINT,
     FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_DELETE_ON_CLOSE, FILE_FLAG_OPEN_REPARSE_POINT,
     FILE_READ_ATTRIBUTES, FILE_SHARE_READ, GetDiskFreeSpaceExW, GetFileInformationByHandle,
     MOVEFILE_WRITE_THROUGH, MoveFileExW,
+};
+use windows_sys::Win32::System::EventLog::{
+    DeregisterEventSource, EVENTLOG_ERROR_TYPE, EVENTLOG_WARNING_TYPE, RegisterEventSourceW,
+    ReportEventW,
 };
 
 /// NUL-terminated UTF-16, rejecting interior NULs that would truncate the path.
@@ -136,6 +142,41 @@ pub(super) fn configure_log(options: &mut OpenOptions) {
 }
 
 pub(super) fn configure_private_dir(_builder: &mut DirBuilder) {}
+
+/// Report one event to the Application event log under the source `aria_move`.
+pub(crate) fn system_log(severity: Severity, message: &str) {
+    let source: Vec<u16> = "aria_move\0".encode_utf16().collect();
+    let text: Vec<u16> = message
+        .replace('\0', " ")
+        .encode_utf16()
+        .chain([0])
+        .collect();
+    let kind = match severity {
+        Severity::Error => EVENTLOG_ERROR_TYPE,
+        Severity::Warning => EVENTLOG_WARNING_TYPE,
+    };
+    // SAFETY: both strings are NUL-terminated and outlive the calls, and the
+    // handle is released before returning.
+    unsafe {
+        let handle = RegisterEventSourceW(ptr::null(), source.as_ptr());
+        if handle.is_null() {
+            return;
+        }
+        let strings = [text.as_ptr()];
+        ReportEventW(
+            handle,
+            kind,
+            0,
+            0,
+            ptr::null_mut(),
+            1,
+            0,
+            strings.as_ptr(),
+            ptr::null(),
+        );
+        DeregisterEventSource(handle);
+    }
+}
 
 /// `DeleteFile` refuses read-only files; the attribute is cleared first.
 // The lint warns about Unix world-writable modes; on Windows this only clears

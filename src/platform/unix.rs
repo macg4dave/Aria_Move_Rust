@@ -1,4 +1,5 @@
 //! Native primitives for Linux and macOS (and best-effort other Unix systems).
+use crate::logging::Severity;
 use std::ffi::CString;
 use std::fs::{self, DirBuilder, File, Metadata, OpenOptions};
 use std::io;
@@ -98,6 +99,23 @@ pub(super) fn configure_log(options: &mut OpenOptions) {
     options
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+}
+
+/// Send one record to syslog (journald under systemd, the unified log on macOS).
+pub(crate) fn system_log(severity: Severity, message: &str) {
+    let Ok(message) = CString::new(message.replace('\0', " ")) else {
+        return;
+    };
+    let priority = match severity {
+        Severity::Error => libc::LOG_ERR,
+        Severity::Warning => libc::LOG_WARNING,
+    };
+    // SAFETY: the identifier is a static C string, and the "%s" format
+    // consumes exactly the one NUL-terminated argument passed.
+    unsafe {
+        libc::openlog(c"aria_move".as_ptr(), libc::LOG_PID, libc::LOG_DAEMON);
+        libc::syslog(priority, c"%s".as_ptr(), message.as_ptr());
+    }
 }
 
 pub(super) fn configure_private_dir(builder: &mut DirBuilder) {

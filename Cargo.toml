@@ -17,7 +17,6 @@ tracing-subscriber = { version = "0.3", features = [
     "fmt",
     "json",
 ] }
-tracing-appender = "0.2"
 walkdir = "2.3"
 tempfile = "3"
 serde = { version = "1.0", features = ["derive"] }
@@ -32,7 +31,7 @@ libc = "0.2"
 xattr = { version = "1", optional = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_EventLog"] }
 
 [dev-dependencies]
 serde_json = "1.0"

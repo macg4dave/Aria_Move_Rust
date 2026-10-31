@@ -203,9 +203,30 @@ Change the incoming and completed entries. For example:
   <download_base>/srv/downloads/incoming</download_base>
   <completed_base>/srv/downloads/completed</completed_base>
   <log_file>/var/log/aria-move/aria_move.log</log_file>
-  <log_level>normal</log_level>
+  <log_level>warn</log_level>
 </config>
 ```
+
+Aria Move writes to two independent logs:
+
+- **System log** – every application warning, error and crash (a failed move,
+  a file it cannot read or write, a bad configuration, a log file it cannot
+  open), whatever `log_level` says. On Linux and macOS this is syslog
+  (`journalctl -t aria_move` on systemd); on Windows it is the Application
+  event log, source `aria_move`. The same messages are printed to stderr.
+  Successful moves and diagnostics never go here.
+- **Log file** (`log_file`) – controlled by `log_level`:
+
+| `log_level` | Log file contents |
+| --- | --- |
+| `verbose` | Everything: diagnostics, completed moves, warnings and errors |
+| `normal` | Completed moves, warnings and errors |
+| `warn` (default) | Warnings and errors only |
+
+The old `debug`, `trace`, `info` and `detailed` names are aliases for `verbose`;
+`quiet`, `error`, `none` and `warning` are aliases for `warn`. `--json` writes the
+log file as JSON lines. Errors that happen before the configuration is loaded
+can only reach the system log, because the log file's path is not known yet.
 
 You can keep other valid settings that were already in the file. Use **absolute paths**, not relative paths. Keep the incoming and completed folders separate; don't put one inside the other.
 
@@ -250,6 +271,7 @@ All the following commands apply to the bundled Debian/Ubuntu service.
 | Restart after changing settings | `sudo systemctl restart aria-move`           |
 | View recent service messages    | `journalctl -u aria-move -e`                 |
 | Watch service messages live     | `journalctl -u aria-move -f`                 |
+| View mover errors               | `journalctl -t aria_move -e`                 |
 | Check mover settings            | `sudo -u aria-move aria_move --check-config` |
 | Show available options          | `aria_move --help`                           |
 
@@ -350,6 +372,12 @@ on-download-complete=C:\Tools\AriaMove\aria_move.exe
 
 Restart aria2 after changing its configuration. aria2 invokes Aria Move once per completed download. No administrator rights are normally required to run the mover under your user account.
 
+**Windows errors** go to the Application event log under the source `aria_move`. Until that source is registered, Event Viewer shows each message under "the following information was included with the event". To register it once, run in an elevated **Windows PowerShell 5.1** prompt:
+
+```powershell
+New-EventLog -LogName Application -Source aria_move
+```
+
 **Windows configuration:** The default user config is at `%APPDATA%\aria_move\config.xml`. If a file already exists, `--init` will refuse to replace it. Edit the existing config or use `--config` to select another config file.
 
 ## Other Linux installations / build from source
@@ -407,6 +435,7 @@ sudo apt purge aria-move
 ```bash
 systemctl status aria-move
 sudo journalctl -u aria-move -n 50 --no-pager
+sudo journalctl -t aria_move -n 50 --no-pager
 sudo -u aria-move aria_move --check-config
 ```
 
