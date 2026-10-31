@@ -52,6 +52,15 @@ macOS retains its native implementation; this pass adds no macOS test requiremen
 
 ## Debian package lifecycle
 
+Also test a real hostname-based HTTPS download on a networked test server with
+the bundled service running. Localhost-only tests cannot detect DNS failures in
+the service sandbox:
+
+```sh
+sudo env ARIA_MOVE_TEST_URL=https://deb.debian.org/debian/README \
+  python3 tests/packaging/download.py
+```
+
 Build the package, then test it in an ephemeral systemd-nspawn guest. The host
 needs systemd-container and debootstrap. Create a clean rootfs once:
 

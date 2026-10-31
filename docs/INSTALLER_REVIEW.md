@@ -57,7 +57,11 @@ reuses them. The README and installation guide describe this retention policy.
 
 The test package is built against Debian 13 libraries. Debian 12 compatibility
 requires building and testing in the documented Debian 12 build container.
-ARM64 package lifecycle and native ARM64 hardware are separate release gates.
+Subsequent [smoke101 ARM64 tests](SMOKE101.md) covered native package building,
+clean installation of the bundled service, DNS/TLS downloads, restart and a
+server reboot. Those tests found and fixed a DNS socket-family restriction in
+the bundled unit; see [major issues](../issues.md). Full ARM64 upgrade/removal
+lifecycle coverage remains a separate release gate.
 Windows Rust execution was tested; Windows aria2 startup/hook integration was
 reviewed but not exercised against a Windows aria2 installation. No physical
 host reboot, macOS testing or CI infrastructure was added.

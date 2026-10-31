@@ -3,5 +3,5 @@
 
 # Shell entry points must also run from Windows checkouts.
 *.sh text eol=lf
-debian/* text eol=lf
+debian/** text eol=lf
 packaging/* text eol=lf

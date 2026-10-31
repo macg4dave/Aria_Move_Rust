@@ -12,7 +12,9 @@ if [ "$1" = configure ]; then
 fi
 #DEBHELPER#
 if [ "$1" = configure ]; then
-    echo 'Aria Move: configuration is in /etc/aria_move; manage with systemctl status aria-move.'
-    echo 'RPC listens on localhost:6800; read the private token with sudo cat /var/lib/aria-move/rpc-secret after service start.'
-    echo 'For startup errors: journalctl -u aria-move -e. See /usr/share/doc/aria-move/INSTALLATION.md.'
+    echo 'Aria Move installed. Mover configuration: /etc/aria_move/config.xml.'
+    echo 'Bundled service: systemctl status aria-move. When started, its default RPC endpoint is localhost:6800.'
+    echo 'Bundled RPC token after startup: sudo cat /var/lib/aria-move/rpc-secret.'
+    echo 'If using your own aria2 service, keep the bundled service disabled and manage your existing service instead.'
+    echo 'Setup and troubleshooting: /usr/share/doc/aria-move/INSTALLATION.md.'
 fi
