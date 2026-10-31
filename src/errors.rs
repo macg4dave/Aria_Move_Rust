@@ -1,184 +1,153 @@
-//! Typed error definitions for aria_move.
-//! Small, focused set of well-known failure modes for better logs and tests.
+//! Typed failure classes for logs, exit diagnostics and tests.
+//!
+//! Operations return `anyhow::Error` chains. Where a failure has a stable class,
+//! an [`AriaMoveError`] is attached to the chain so callers can recover it with
+//! `downcast_ref` while the original OS error stays available as the cause.
 
-use serde::{Deserialize, Serialize};
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-/// Non-exhaustive to allow adding new variants without breaking downstream code.
-#[derive(Debug, Error, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum AriaMoveError {
-    /// The requested source path was not found.
+    /// The requested source path does not exist.
     #[error("Source path not found: {0}")]
     SourceNotFound(PathBuf),
 
-    /// A filesystem permission or policy prevents the operation.
-    #[error("Permission denied on {path}: {context}")]
-    PermissionDenied { path: PathBuf, context: String },
+    /// The operating system denied access.
+    #[error("Permission denied: cannot {operation} '{path}'")]
+    PermissionDenied { operation: String, path: PathBuf },
 
-    /// Not enough free space at the destination for the operation.
-    #[error(
-        "Insufficient disk space for destination {dest}: need {required} bytes, have {available} bytes"
-    )]
+    /// The destination filesystem lacks room for a copy.
+    #[error("Insufficient disk space at {dest}: need {required} bytes, have {available} bytes")]
     InsufficientSpace {
-        required: u128,
-        available: u128,
+        required: u64,
+        available: u64,
         dest: PathBuf,
     },
 
-    /// A cooperative shutdown/interrupt was requested (e.g., SIGINT).
+    /// A cooperative shutdown (SIGINT/SIGTERM/Ctrl-C) was requested.
     #[error("Operation interrupted by user")]
     Interrupted,
 
-    /// An I/O failure not covered by a specific policy error.
-    #[error("I/O error at {path}: {context}")]
-    Io { path: PathBuf, context: String },
+    /// Any other I/O failure.
+    #[error("Cannot {operation} '{path}'")]
+    Io { operation: String, path: PathBuf },
 
-    // --- Resolution-specific errors ---
-    /// Provided path exists but is not a regular file (e.g., directory, symlink if disallowed).
-    #[error("Provided path is not a regular file: {0}")]
+    /// The source exists but is neither a regular file nor a directory.
+    #[error("Provided path is not a regular file or directory: {0}")]
     ProvidedNotFile(PathBuf),
-    /// Provided path existed initially but disappeared before use.
-    #[error("Resolved file disappeared: {0}")]
-    Disappeared(PathBuf),
-    /// Automatic resolution found no candidate (respecting recent_window semantics).
-    #[error("No file found under base: {0}")]
+
+    /// No source path was supplied; nothing is ever selected automatically.
+    #[error("No source path provided; pass the completed download (download base: {0})")]
     NoneFound(PathBuf),
-    /// Download base missing or not a directory.
-    #[error("Download base invalid: {0}")]
-    BaseInvalid(PathBuf),
 }
 
 impl AriaMoveError {
-    /// Stable, machine-readable code for the variant (for logs/tests/JSON).
+    /// Stable, machine-readable code for logs and JSON output.
     pub fn code(&self) -> &'static str {
         match self {
-            AriaMoveError::SourceNotFound(_) => "source_not_found",
-            AriaMoveError::PermissionDenied { .. } => "permission_denied",
-            AriaMoveError::InsufficientSpace { .. } => "insufficient_space",
-            AriaMoveError::Interrupted => "interrupted",
-            AriaMoveError::Io { .. } => "io_error",
-            AriaMoveError::ProvidedNotFile(_) => "provided_not_file",
-            AriaMoveError::Disappeared(_) => "disappeared",
-            AriaMoveError::NoneFound(_) => "none_found",
-            AriaMoveError::BaseInvalid(_) => "base_invalid",
-        }
-    }
-
-    /// Map a std::io::Error that occurred while accessing `path` into a structured AriaMoveError.
-    pub fn from_io(path: impl Into<PathBuf>, err: &io::Error) -> AriaMoveError {
-        let path = path.into();
-        match err.kind() {
-            io::ErrorKind::NotFound => AriaMoveError::SourceNotFound(path),
-            io::ErrorKind::PermissionDenied => AriaMoveError::PermissionDenied {
-                path,
-                context: "permission denied".to_string(),
-            },
-            io::ErrorKind::Interrupted => AriaMoveError::Interrupted,
-            _ => AriaMoveError::Io {
-                path,
-                context: format!("io error: {:?}", err.kind()),
-            },
+            Self::SourceNotFound(_) => "source_not_found",
+            Self::PermissionDenied { .. } => "permission_denied",
+            Self::InsufficientSpace { .. } => "insufficient_space",
+            Self::Interrupted => "interrupted",
+            Self::Io { .. } => "io_error",
+            Self::ProvidedNotFile(_) => "provided_not_file",
+            Self::NoneFound(_) => "none_found",
         }
     }
 }
 
-/// Preserve the OS error as a cause while exposing stable typed classification.
-pub(crate) fn io_context(path: &std::path::Path, error: io::Error) -> anyhow::Error {
-    let classification = AriaMoveError::from_io(path, &error);
-    anyhow::Error::new(error).context(classification)
+/// Attach the operation, path and stable class to an OS error, keeping it as the cause.
+pub(crate) fn io_error(operation: &str, path: &Path, error: io::Error) -> anyhow::Error {
+    let class = match error.kind() {
+        io::ErrorKind::PermissionDenied => AriaMoveError::PermissionDenied {
+            operation: operation.to_owned(),
+            path: path.to_path_buf(),
+        },
+        io::ErrorKind::Interrupted => AriaMoveError::Interrupted,
+        _ => AriaMoveError::Io {
+            operation: operation.to_owned(),
+            path: path.to_path_buf(),
+        },
+    };
+    anyhow::Error::new(error).context(class)
+}
+
+/// Like [`io_error`], but a missing path is reported as a missing source.
+pub(crate) fn source_error(path: &Path, error: io::Error) -> anyhow::Error {
+    if error.kind() == io::ErrorKind::NotFound {
+        anyhow::Error::new(error).context(AriaMoveError::SourceNotFound(path.to_path_buf()))
+    } else {
+        io_error("inspect source", path, error)
+    }
+}
+
+/// The stable code of the outermost classified error in a chain.
+pub fn error_code(error: &anyhow::Error) -> &'static str {
+    // `downcast_ref` also searches context layers, which `chain()` cannot.
+    error
+        .downcast_ref::<AriaMoveError>()
+        .map_or("error", AriaMoveError::code)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::{json, to_value};
-    use std::path::PathBuf;
 
     #[test]
-    fn code_mappings_are_stable() {
-        assert_eq!(
-            AriaMoveError::Io {
-                path: PathBuf::from("/x"),
-                context: "error".into()
-            }
-            .code(),
-            "io_error"
-        );
-        assert_eq!(
-            AriaMoveError::SourceNotFound(PathBuf::from("/x")).code(),
-            "source_not_found"
-        );
-        assert_eq!(
-            AriaMoveError::PermissionDenied {
-                path: PathBuf::from("/x"),
-                context: "ro".into()
-            }
-            .code(),
-            "permission_denied"
-        );
-        assert_eq!(
-            AriaMoveError::InsufficientSpace {
-                required: 10,
-                available: 5,
-                dest: PathBuf::from("/dst")
-            }
-            .code(),
-            "insufficient_space"
-        );
-        assert_eq!(AriaMoveError::Interrupted.code(), "interrupted");
-        assert_eq!(
-            AriaMoveError::ProvidedNotFile(PathBuf::from("/x")).code(),
-            "provided_not_file"
-        );
-        assert_eq!(
-            AriaMoveError::Disappeared(PathBuf::from("/x")).code(),
-            "disappeared"
-        );
-        assert_eq!(
-            AriaMoveError::NoneFound(PathBuf::from("/base")).code(),
-            "none_found"
-        );
-        assert_eq!(
-            AriaMoveError::BaseInvalid(PathBuf::from("/db")).code(),
-            "base_invalid"
-        );
-    }
-
-    #[test]
-    fn serializes_with_external_tag() {
-        let e = AriaMoveError::PermissionDenied {
-            path: PathBuf::from("/x"),
-            context: "ro".into(),
-        };
-        let v = to_value(&e).unwrap();
-        // Externally tagged enum: { "PermissionDenied": { "path": "/x", "context": "ro" } }
-        assert!(v.get("PermissionDenied").is_some());
-        let inner = &v["PermissionDenied"];
-        assert_eq!(inner["path"], json!(PathBuf::from("/x")));
-        assert_eq!(inner["context"], json!("ro"));
-    }
-
-    #[test]
-    fn maps_io_errors() {
-        let nf = io::Error::from(io::ErrorKind::NotFound);
-        let e = AriaMoveError::from_io("/missing", &nf);
-        assert!(matches!(e, AriaMoveError::SourceNotFound(p) if p.as_path() == "/missing"));
-
-        let pd = io::Error::from(io::ErrorKind::PermissionDenied);
-        let e = AriaMoveError::from_io("/root", &pd);
-        assert!(
-            matches!(e, AriaMoveError::PermissionDenied { path, .. } if path.as_path() == "/root")
-        );
-
-        let other = io::Error::from(io::ErrorKind::Other);
-        let e = AriaMoveError::from_io("/x", &other);
-        if let AriaMoveError::Io { context, .. } = e {
-            assert!(context.contains("io error"));
-        } else {
-            panic!("expected Io for Other kind");
+    fn io_errors_are_classified_and_keep_their_cause() {
+        let cases = [
+            (io::ErrorKind::PermissionDenied, "permission_denied"),
+            (io::ErrorKind::Interrupted, "interrupted"),
+            (io::ErrorKind::NotFound, "io_error"),
+            (io::ErrorKind::Other, "io_error"),
+        ];
+        for (kind, code) in cases {
+            let error = io_error("open", Path::new("/x"), io::Error::from(kind));
+            assert_eq!(error_code(&error), code, "{kind:?}");
+            assert_eq!(
+                error
+                    .root_cause()
+                    .downcast_ref::<io::Error>()
+                    .unwrap()
+                    .kind(),
+                kind
+            );
         }
+    }
+
+    #[test]
+    fn missing_source_is_a_typed_not_found() {
+        let error = source_error(Path::new("/gone"), io::ErrorKind::NotFound.into());
+        assert_eq!(
+            error.downcast_ref::<AriaMoveError>(),
+            Some(&AriaMoveError::SourceNotFound(PathBuf::from("/gone")))
+        );
+        let error = source_error(Path::new("/x"), io::ErrorKind::PermissionDenied.into());
+        assert_eq!(error_code(&error), "permission_denied");
+    }
+
+    #[test]
+    fn messages_name_the_operation_and_path() {
+        let error = io_error(
+            "rename into",
+            Path::new("/dest"),
+            io::ErrorKind::Other.into(),
+        );
+        assert_eq!(error.to_string(), "Cannot rename into '/dest'");
+        let rendered = format!("{error:#}");
+        assert!(
+            rendered.starts_with("Cannot rename into '/dest': "),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn unclassified_chains_have_a_generic_code() {
+        assert_eq!(error_code(&anyhow::anyhow!("plain")), "error");
+        let nested = anyhow::Error::from(AriaMoveError::Interrupted).context("outer");
+        assert_eq!(error_code(&nested), "interrupted");
     }
 }

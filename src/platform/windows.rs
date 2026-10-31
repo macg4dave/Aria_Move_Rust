@@ -1,100 +1,161 @@
-//! Windows filesystem adapters. POSIX mode setters do not modify ACLs.
-use anyhow::{Result, bail};
-use std::fs;
+//! Native primitives for Windows. POSIX modes have no equivalent here; only
+//! the read-only attribute is meaningful.
+use std::fs::{self, DirBuilder, File, Metadata, OpenOptions};
 use std::io;
+use std::os::windows::ffi::OsStrExt;
+use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
-use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
-pub fn open_log_file_secure_append(path: &Path) -> io::Result<fs::File> {
-    super::filesystem::open_log(path)
-}
-pub fn write_config_secure_new_0600(path: &Path, contents: &[u8]) -> Result<()> {
-    super::filesystem::write_config_new(path, contents)
-}
-pub fn set_dir_mode_0700(_path: &Path) -> io::Result<()> {
-    Ok(())
-}
-pub fn set_file_mode_0600(_path: &Path) -> io::Result<()> {
-    Ok(())
-}
-pub fn ensure_secure_directory(path: &Path, label: &str) -> Result<()> {
-    crate::config::paths::reject_symlinks(path)?;
-    let meta = fs::metadata(path)?;
-    if !meta.is_dir() || meta.permissions().readonly() {
-        bail!("{label} '{}' is not a writable directory", path.display());
-    }
-    Ok(())
-}
-pub fn check_disk_space(path: &std::path::Path) -> std::io::Result<u64> {
-    use std::ffi::OsStr;
-    use std::iter::once;
-    use std::os::windows::ffi::OsStrExt;
+use windows_sys::Win32::Foundation::{ERROR_SHARING_VIOLATION, GENERIC_READ, GENERIC_WRITE};
+use windows_sys::Win32::Storage::FileSystem::{
+    BY_HANDLE_FILE_INFORMATION, DELETE, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_REPARSE_POINT,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_DELETE_ON_CLOSE, FILE_FLAG_OPEN_REPARSE_POINT,
+    FILE_READ_ATTRIBUTES, FILE_SHARE_READ, GetDiskFreeSpaceExW, GetFileInformationByHandle,
+    MOVEFILE_WRITE_THROUGH, MoveFileExW,
+};
 
-    let wide: Vec<u16> = OsStr::new(path).encode_wide().chain(once(0)).collect();
-    if wide[..wide.len() - 1].contains(&0) {
+/// NUL-terminated UTF-16, rejecting interior NULs that would truncate the path.
+fn wide(path: &Path) -> io::Result<Vec<u16>> {
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    if wide.contains(&0) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "path contains NUL",
+            "path contains an interior NUL character",
         ));
     }
-    let mut free_avail: u64 = 0;
-    let mut _total: u64 = 0;
-    let mut _total_free: u64 = 0;
-    // SAFETY: wide is NUL-terminated; all output pointers are valid and exclusive.
+    wide.push(0);
+    Ok(wide)
+}
+
+/// Symlinks, junctions and every other reparse-point type.
+pub(crate) fn is_link(meta: &Metadata) -> bool {
+    meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+pub(crate) fn file_identity(file: &File, _meta: &Metadata) -> io::Result<(u64, u64)> {
+    use std::os::windows::io::AsRawHandle;
+    let mut info = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
+    // SAFETY: `file` owns a valid handle and `info` is writable storage for the result.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), info.as_mut_ptr()) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: the successful call initialized `info`.
+    let info = unsafe { info.assume_init() };
+    Ok((
+        u64::from(info.dwVolumeSerialNumber),
+        (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+    ))
+}
+
+pub(crate) fn free_space(path: &Path) -> io::Result<u64> {
+    let path = wide(path)?;
+    let mut available = 0u64;
+    // SAFETY: `path` is NUL-terminated; the output pointer is valid and the
+    // optional total counters are null.
     let ok = unsafe {
         GetDiskFreeSpaceExW(
-            wide.as_ptr(),
-            &mut free_avail,
-            &mut _total,
-            &mut _total_free,
+            path.as_ptr(),
+            &mut available,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
         )
     };
     if ok == 0 {
         return Err(io::Error::last_os_error());
     }
-    Ok(free_avail)
+    Ok(available)
+}
+
+/// Publication uses `MOVEFILE_WRITE_THROUGH`; directory handles cannot be flushed.
+pub(crate) fn sync_directory(_path: &Path) -> io::Result<()> {
+    Ok(())
+}
+
+/// Hold an exclusive, hidden, delete-on-close sidecar inside the directory.
+pub(crate) fn try_lock_directory(dir: &Path) -> io::Result<Option<File>> {
+    let path = dir.join(".aria_move.dir.lock");
+    super::reject_symlinks(&path)?;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .access_mode(GENERIC_READ | GENERIC_WRITE | DELETE)
+        .share_mode(0)
+        .custom_flags(
+            FILE_ATTRIBUTE_HIDDEN | FILE_FLAG_DELETE_ON_CLOSE | FILE_FLAG_OPEN_REPARSE_POINT,
+        )
+        .open(&path);
+    match file {
+        Ok(file) if is_link(&file.metadata()?) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "lock file is a reparse point",
+        )),
+        Ok(file) => Ok(Some(file)),
+        Err(e) if e.raw_os_error() == Some(ERROR_SHARING_VIOLATION as i32) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+pub(super) fn configure_read(options: &mut OpenOptions) {
+    options
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .share_mode(FILE_SHARE_READ);
+}
+
+pub(super) fn configure_directory(options: &mut OpenOptions) {
+    options
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
+}
+
+pub(super) fn configure_log(options: &mut OpenOptions) {
+    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+}
+
+pub(super) fn configure_private_dir(_builder: &mut DirBuilder) {}
+
+/// `DeleteFile` refuses read-only files; the attribute is cleared first.
+// The lint warns about Unix world-writable modes; on Windows this only clears
+// FILE_ATTRIBUTE_READONLY on a file that is about to be deleted.
+#[expect(clippy::permissions_set_readonly_false)]
+pub(super) fn prepare_removal(path: &Path) -> io::Result<()> {
+    let mut permissions = fs::symlink_metadata(path)?.permissions();
+    if permissions.readonly() {
+        permissions.set_readonly(false);
+        fs::set_permissions(path, permissions)?;
+    }
+    Ok(())
+}
+
+pub(super) fn rename_noreplace(src: &Path, dst: &Path) -> io::Result<()> {
+    let (from, to) = (wide(src)?, wide(dst)?);
+    // SAFETY: both buffers are NUL-terminated and outlive the call. Without
+    // MOVEFILE_REPLACE_EXISTING or MOVEFILE_COPY_ALLOWED an existing destination
+    // fails and a cross-volume move reports ERROR_NOT_SAME_DEVICE.
+    if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), MOVEFILE_WRITE_THROUGH) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::tempdir;
 
     #[test]
-    fn log_file_append_preserves_content() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("log.txt");
-        fs::write(&path, b"hello").unwrap();
-        {
-            let mut f = open_log_file_secure_append(&path).unwrap();
-            f.write_all(b" world").unwrap();
-        }
-        let got = fs::read(&path).unwrap();
-        assert_eq!(&got, b"hello world");
+    fn lock_sidecar_is_hidden_and_deleted_on_release() {
+        let temp = tempfile::tempdir().unwrap();
+        let sidecar = temp.path().join(".aria_move.dir.lock");
+        let lock = try_lock_directory(temp.path()).unwrap().unwrap();
+        let attributes = fs::metadata(&sidecar).unwrap().file_attributes();
+        assert_ne!(attributes & FILE_ATTRIBUTE_HIDDEN, 0);
+        drop(lock);
+        assert!(!sidecar.exists());
     }
 
     #[test]
-    fn atomic_config_write_creates_file() {
-        let dir = tempdir().unwrap();
-        let cfg = dir.path().join("config.xml");
-        write_config_secure_new_0600(&cfg, b"<x/>").unwrap();
-        let contents = fs::read(&cfg).unwrap();
-        assert_eq!(contents, b"<x/>");
-        for entry in fs::read_dir(dir.path()).unwrap() {
-            let p = entry.unwrap().path();
-            let name = p.file_name().unwrap().to_string_lossy();
-            assert!(
-                !name.starts_with(".aria_move.config.tmp."),
-                "leftover temp file: {}",
-                name
-            );
-        }
-    }
-
-    #[test]
-    fn disk_space_smoke() {
-        let dir = tempdir().unwrap();
-        let bytes = check_disk_space(dir.path()).unwrap();
-        assert!(bytes > 0);
+    fn interior_nul_is_rejected_before_any_native_call() {
+        let error = rename_noreplace(Path::new("a\0b"), Path::new("c")).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
 }

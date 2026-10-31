@@ -1,35 +1,35 @@
-//! Structured tracing with one formatter policy for stdout and optional file output.
+//! Tracing setup: one formatter policy for stdout and an optional log file.
+use crate::{LogLevel, output, platform};
 use anyhow::Result;
-use aria_move::{LogLevel, output as out, platform::open_log_file_secure_append};
-use chrono::Local;
+use std::io::IsTerminal;
 use std::path::Path;
 use tracing::Subscriber;
 use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::fmt::{self, MakeWriter, format::Writer, time::FormatTime};
 use tracing_subscriber::{
-    Layer,
-    filter::EnvFilter,
-    fmt::{self, MakeWriter, format::Writer, time::FormatTime},
-    layer::SubscriberExt,
-    registry::LookupSpan,
-    util::SubscriberInitExt,
+    EnvFilter, Layer, layer::SubscriberExt, registry::LookupSpan, util::SubscriberInitExt,
 };
 
-struct LocalHumanTime;
-impl FormatTime for LocalHumanTime {
+struct LocalTime;
+
+impl FormatTime for LocalTime {
     fn format_time(&self, writer: &mut Writer<'_>) -> std::fmt::Result {
-        write!(writer, "{}", Local::now().format("%d/%m/%y %H:%M:%S"))
+        write!(
+            writer,
+            "{}",
+            chrono::Local::now().format("%d/%m/%y %H:%M:%S")
+        )
     }
 }
 
-fn formatting_layer<S, W>(writer: W, json: bool, ansi: bool) -> Box<dyn Layer<S> + Send + Sync>
+fn layer<S, W>(writer: W, json: bool, ansi: bool) -> Box<dyn Layer<S> + Send + Sync>
 where
     S: Subscriber + for<'a> LookupSpan<'a>,
     W: for<'a> MakeWriter<'a> + Send + Sync + 'static,
 {
     let layer = fmt::layer()
-        .with_timer(LocalHumanTime)
+        .with_timer(LocalTime)
         .with_target(false)
-        .with_thread_ids(false)
         .with_ansi(ansi)
         .with_writer(writer);
     if json {
@@ -39,41 +39,28 @@ where
     }
 }
 
-pub fn init_tracing(
-    level: &LogLevel,
-    log_file: Option<&Path>,
-    json: bool,
-) -> Result<Option<WorkerGuard>> {
-    let filter = match level {
-        LogLevel::Quiet => "error",
-        LogLevel::Normal => "info",
-        LogLevel::Info => "debug",
-        LogLevel::Debug => "trace",
-    };
-    let file = log_file.and_then(|path| match open_log_file_secure_append(path) {
+/// Install the global subscriber. A log file that cannot be opened is reported
+/// and skipped; logging to stdout continues. Keep the guard alive until exit
+/// so buffered file output is flushed.
+pub fn init(level: LogLevel, log_file: Option<&Path>, json: bool) -> Result<Option<WorkerGuard>> {
+    let file = log_file.and_then(|path| match platform::open_log_append(path) {
         Ok(file) => Some(tracing_appender::non_blocking(file)),
         Err(error) => {
-            out::print_warn(&format!(
-                "Requested file logging to '{}' was not enabled: {error}. Logs continue to stdout.",
+            output::print_warn(&format!(
+                "File logging to '{}' is disabled: {error}. Logs continue on stdout.",
                 path.display()
             ));
             None
         }
     });
-    let (writer, guard) = match file {
-        Some((writer, guard)) => (Some(writer), Some(guard)),
+    let (file_layer, guard) = match file {
+        Some((writer, guard)) => (Some(layer(writer, json, false)), Some(guard)),
         None => (None, None),
     };
-    use std::io::IsTerminal;
-    let stdout = formatting_layer(
-        std::io::stdout,
-        json,
-        !json && out::color_enabled(std::io::stdout().is_terminal()),
-    );
-    let file_layer = writer.map(|writer| formatting_layer(writer, json, false));
+    let ansi = !json && output::color_enabled(std::io::stdout().is_terminal());
     tracing_subscriber::registry()
-        .with(EnvFilter::new(filter))
-        .with(stdout)
+        .with(EnvFilter::new(level.filter()))
+        .with(layer(std::io::stdout, json, ansi))
         .with(file_layer)
         .try_init()?;
     Ok(guard)

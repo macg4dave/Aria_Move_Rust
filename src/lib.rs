@@ -1,73 +1,31 @@
-//! Library crate root for aria_move.
-//! Exposes a minimal, stable API and a convenient prelude for common imports.
-//!
-//! Notes:
-//! - Re-exports come from concrete submodules to avoid accidental breakage if mod.rs changes.
-//! - Prefer the `prelude` for downstream crates/tests to keep imports tidy.
-//!
-//! Example
-//! -------
+//! aria_move: move completed aria2 downloads from a download base into a
+//! completed base, by exclusive rename or a verified copy across filesystems.
 //!
 //! ```no_run
-//! use aria_move::prelude::*;
+//! use aria_move::{Config, config, move_entry, resolve_source_path};
 //!
-//! fn run() -> AMResult<()> {
-//!     // Build a default config and wire minimal fields
-//!     let mut cfg = Config::default();
-//!     // cfg.download_base = "/incoming".into();
-//!     // cfg.completed_base = "/completed".into();
-//!     
-//!     // Discover default config/log paths if needed
-//!     let _default_cfg = default_config_path()?;
-//!
-//!     // Resolve and move (illustrative; requires real paths)
-//!     // let src = resolve_source_path(&cfg, None)?;
-//!     // let _dest = move_entry(&cfg, &src)?;
+//! fn run() -> anyhow::Result<()> {
+//!     let mut cfg = Config::new("/data/incoming", "/data/completed");
+//!     config::validate_and_normalize(&mut cfg)?;
+//!     let src = resolve_source_path(&cfg, Some("Some Download".as_ref()))?;
+//!     let dest = move_entry(&cfg, &src)?;
+//!     println!("moved to {}", dest.display());
 //!     Ok(())
 //! }
-//! # let _ = AriaMoveError::Interrupted;
 //! ```
 
 pub mod cli;
 pub mod config;
 pub mod errors;
 pub mod fs_ops;
+pub mod logging;
 pub mod output;
-pub mod platform;
+mod platform;
 pub mod shutdown;
-pub mod utils;
 
-// Re-exports for tests and binaries
-pub use config::types::{Config, LogLevel};
-
-// Public API
-pub use config::paths::{default_config_path, default_log_path, path_has_symlink_ancestor};
-pub use config::xml::{
-    load_config_from_default_xml, load_config_from_xml_env, load_config_from_xml_path,
-};
-
-// Operations
-pub use fs_ops::{move_dir, move_entry, move_file, resolve_source_path, safe_copy_and_rename};
-
-// Errors
+pub use config::{Config, LogLevel};
 pub use errors::AriaMoveError;
+pub use fs_ops::{move_entry, resolve_source_path};
 
-/// Library-wide result alias using anyhow for ergonomic returns.
+/// Library-wide result alias.
 pub type AMResult<T> = anyhow::Result<T>;
-
-/// Common imports for applications/tests using aria_move.
-pub mod prelude {
-    pub use crate::AMResult;
-    pub use crate::config::paths::default_config_path;
-    pub use crate::config::types::{Config, LogLevel};
-    pub use crate::errors::AriaMoveError;
-    pub use crate::errors::AriaMoveError as Error;
-    pub use crate::errors::AriaMoveError as E;
-    pub use crate::errors::AriaMoveError as AMError;
-    pub use crate::errors::AriaMoveError as AriaError;
-    pub use crate::errors::AriaMoveError as ErrorKind;
-    pub use crate::fs_ops::{
-        move_dir, move_entry, move_file, resolve_source_path, safe_copy_and_rename,
-    };
-    pub use crate::shutdown::request as request_shutdown;
-}

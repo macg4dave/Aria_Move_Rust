@@ -1,173 +1,144 @@
-//! Metadata preservation.
-//! - Copies timestamps (atime, mtime) and, on Unix, permissions (mode) from source->dest.
-//! - Best-effort: failures to set times/perms are ignored (function returns Ok(())).
-//! - Callers decide whether to treat failures as fatal; this helper itself does not.
-
-use anyhow::Result;
-use filetime::{FileTime, set_file_times};
-#[cfg(not(unix))]
-use filetime::{set_file_atime, set_file_mtime};
-use std::fs;
+//! Best-effort metadata preservation for copies. A rename keeps everything,
+//! so these only run on the copy fallback. Failures are logged, never fatal.
+use crate::Config;
+use std::fs::{self, Metadata};
 use std::path::Path;
-use tracing::{trace, warn};
+use tracing::warn;
 
-/// Preserve metadata on `dest` using already-fetched `src_meta`.
-/// Callers pass src metadata to avoid re-statting the source repeatedly.
-/// Preserve metadata on `dest` using already-fetched `src_meta`.
-/// Best effort: failures are logged and ignored.
-pub fn preserve_metadata(dest: &Path, src_meta: &fs::Metadata) -> Result<()> {
-    // 1) Timestamps
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let mt = FileTime::from_unix_time(src_meta.mtime(), src_meta.mtime_nsec() as u32);
-        let at = FileTime::from_unix_time(src_meta.atime(), src_meta.atime_nsec() as u32);
-        if let Err(e) = set_file_times(dest, at, mt) {
-            warn!(path = %dest.display(), error = %e, "failed to set atime/mtime on destination");
-        } else {
-            trace!(path = %dest.display(), "set atime/mtime on destination");
-        }
+/// Apply the configured metadata policy from `meta` (the source's) to `dest`.
+/// Permissions go last: a read-only result would block the other writes.
+pub(super) fn apply(config: &Config, src: &Path, dest: &Path, meta: &Metadata) {
+    if config.preserve_metadata {
+        copy_times(dest, meta);
+        copy_xattrs(src, dest);
+        copy_permissions(dest, meta);
+    } else if config.preserve_permissions {
+        copy_permissions(dest, meta);
     }
-    #[cfg(not(unix))]
-    {
-        let at = src_meta.accessed().ok().map(FileTime::from_system_time);
-        let mt = src_meta.modified().ok().map(FileTime::from_system_time);
-        match (at, mt) {
-            (Some(a), Some(m)) => {
-                if let Err(e) = set_file_times(dest, a, m) {
-                    warn!(path = %dest.display(), error = %e, "failed to set atime/mtime on destination");
-                } else {
-                    trace!(path = %dest.display(), "set atime/mtime on destination");
-                }
-            }
-            (Some(a), None) => {
-                if let Err(e) = set_file_atime(dest, a) {
-                    warn!(path = %dest.display(), error = %e, "failed to set atime on destination");
-                } else {
-                    trace!(path = %dest.display(), "set atime on destination");
-                }
-            }
-            (None, Some(m)) => {
-                if let Err(e) = set_file_mtime(dest, m) {
-                    warn!(path = %dest.display(), error = %e, "failed to set mtime on destination");
-                } else {
-                    trace!(path = %dest.display(), "set mtime on destination");
-                }
-            }
-            (None, None) => {}
-        }
-    }
-
-    // 2) Permissions (Unix only)
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let src_mode = src_meta.permissions().mode() & 0o777;
-        let perms = fs::Permissions::from_mode(src_mode);
-        if let Err(e) = fs::set_permissions(dest, perms) {
-            warn!(path = %dest.display(), mode = format!("{:o}", src_mode), error = %e, "failed to set permissions on destination");
-        } else {
-            trace!(path = %dest.display(), mode = format!("{:o}", src_mode), "set permissions on destination");
-        }
-    }
-
-    // 3) Windows: preserve readonly attribute similar to POSIX readonly bit
-    #[cfg(windows)]
-    {
-        let ro = src_meta.permissions().readonly();
-        match fs::metadata(dest) {
-            Ok(meta) => {
-                let mut perms = meta.permissions();
-                perms.set_readonly(ro);
-                if let Err(e) = fs::set_permissions(dest, perms) {
-                    warn!(path = %dest.display(), readonly = ro, error = %e, "failed to set readonly attribute on destination");
-                } else {
-                    trace!(path = %dest.display(), readonly = ro, "set readonly attribute on destination");
-                }
-            }
-            Err(e) => {
-                warn!(path = %dest.display(), error = %e, "failed to stat destination for readonly preservation");
-            }
-        }
-    }
-
-    Ok(())
 }
 
-/// Preserve only permissions (and readonly bit on Windows) from source metadata to dest.
-pub fn preserve_permissions_only(dest: &Path, src_meta: &fs::Metadata) -> Result<()> {
-    // Unix: set mode bits
+/// Unix mode bits (without setuid/setgid/sticky) or the Windows read-only flag.
+fn copy_permissions(dest: &Path, meta: &Metadata) {
     #[cfg(unix)]
-    {
+    let permissions = {
         use std::os::unix::fs::PermissionsExt;
-        let src_mode = src_meta.permissions().mode() & 0o777;
-        let perms = fs::Permissions::from_mode(src_mode);
-        if let Err(e) = fs::set_permissions(dest, perms) {
-            warn!(path = %dest.display(), error = %e, "failed to preserve permissions");
-        }
-    }
-    // Windows: mirror readonly attribute
+        fs::Permissions::from_mode(meta.permissions().mode() & 0o777)
+    };
     #[cfg(windows)]
-    {
-        if let Ok(meta) = fs::metadata(dest) {
-            let mut perms = meta.permissions();
-            perms.set_readonly(src_meta.permissions().readonly());
-            if let Err(e) = fs::set_permissions(dest, perms) {
-                warn!(path = %dest.display(), error = %e, "failed to preserve permissions");
-            }
-        }
+    let permissions = meta.permissions();
+    if let Err(error) = fs::set_permissions(dest, permissions) {
+        warn!(path = %dest.display(), %error, "could not preserve permissions");
     }
-    Ok(())
 }
 
-/// Preserve extended attributes (xattrs) from source path to destination path.
-/// - Requires the "xattrs" feature (otherwise this is a no-op Ok(()))
-///
-/// Listing/setting failures are diagnosed and ignored (best effort).
-pub fn preserve_xattrs(src: &Path, dest: &Path) -> Result<()> {
+fn copy_times(dest: &Path, meta: &Metadata) {
+    let accessed = filetime::FileTime::from_last_access_time(meta);
+    let modified = filetime::FileTime::from_last_modification_time(meta);
+    if let Err(error) = filetime::set_file_times(dest, accessed, modified) {
+        warn!(path = %dest.display(), %error, "could not preserve timestamps");
+    }
+}
+
+#[cfg(all(unix, feature = "xattrs"))]
+fn copy_xattrs(src: &Path, dest: &Path) {
+    let names = match xattr::list(src) {
+        Ok(names) => names,
+        Err(error) => {
+            warn!(path = %src.display(), %error, "could not list extended attributes");
+            return;
+        }
+    };
+    for name in names {
+        let result = xattr::get(src, &name)
+            .and_then(|value| xattr::set(dest, &name, value.as_deref().unwrap_or_default()));
+        if let Err(error) = result {
+            warn!(path = %dest.display(), xattr = %name.to_string_lossy(), %error, "could not preserve extended attribute");
+        }
+    }
+}
+
+#[cfg(not(all(unix, feature = "xattrs")))]
+fn copy_xattrs(_src: &Path, _dest: &Path) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn policy_controls_what_is_copied() {
+        let temp = tempfile::tempdir().unwrap();
+        let src = temp.path().join("src");
+        fs::write(&src, b"x").unwrap();
+        let old = filetime::FileTime::from_unix_time(1_600_000_000, 0);
+        filetime::set_file_mtime(&src, old).unwrap();
+        let mut readonly = fs::metadata(&src).unwrap().permissions();
+        readonly.set_readonly(true);
+        fs::set_permissions(&src, readonly).unwrap();
+        let meta = fs::metadata(&src).unwrap();
+
+        // (preserve_metadata, preserve_permissions) -> (read-only copied, mtime copied)
+        let cases = [
+            ((false, false), (false, false)),
+            ((false, true), (true, false)),
+            ((true, false), (true, true)),
+            ((true, true), (true, true)),
+        ];
+        for (index, ((preserve_metadata, preserve_permissions), expected)) in
+            cases.into_iter().enumerate()
+        {
+            // A fresh, writable destination, exactly like a staged copy.
+            let dest = temp.path().join(format!("dest{index}"));
+            fs::write(&dest, b"x").unwrap();
+            let cfg = Config {
+                preserve_metadata,
+                preserve_permissions,
+                ..Config::default()
+            };
+            apply(&cfg, &src, &dest, &meta);
+            let result = fs::metadata(&dest).unwrap();
+            let actual = (
+                result.permissions().readonly(),
+                filetime::FileTime::from_last_modification_time(&result) == old,
+            );
+            assert_eq!(
+                actual, expected,
+                "metadata={preserve_metadata} permissions={preserve_permissions}"
+            );
+            crate::platform::remove_file(&dest).unwrap();
+        }
+        crate::platform::remove_file(&src).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_mode_bits_are_copied_without_special_bits() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let (src, dest) = (temp.path().join("src"), temp.path().join("dest"));
+        fs::write(&src, b"x").unwrap();
+        fs::write(&dest, b"x").unwrap();
+        fs::set_permissions(&src, fs::Permissions::from_mode(0o4640)).unwrap();
+        copy_permissions(&dest, &fs::metadata(&src).unwrap());
+        assert_eq!(
+            fs::metadata(&dest).unwrap().permissions().mode() & 0o7777,
+            0o640
+        );
+    }
+
     #[cfg(all(unix, feature = "xattrs"))]
-    {
-        use tracing::{trace, warn};
-        // Attempt to list xattrs on source
-        match xattr::list(src) {
-            Ok(names) => {
-                for name in names {
-                    match xattr::get(src, &name) {
-                        Ok(Some(value)) => {
-                            if let Err(e) = xattr::set(dest, &name, &value) {
-                                let name_disp = name.to_string_lossy();
-                                warn!(src=%src.display(), dest=%dest.display(), xattr=%name_disp, error=%e, "failed to set xattr on destination");
-                            } else {
-                                let name_disp = name.to_string_lossy();
-                                trace!(src=%src.display(), dest=%dest.display(), xattr=%name_disp, size=value.len(), "preserved xattr");
-                            }
-                        }
-                        Ok(None) => {
-                            // Attribute exists but empty value (rare); set empty
-                            if let Err(e) = xattr::set(dest, &name, &[]) {
-                                let name_disp = name.to_string_lossy();
-                                warn!(src=%src.display(), dest=%dest.display(), xattr=%name_disp, error=%e, "failed to set empty xattr on destination");
-                            } else {
-                                let name_disp = name.to_string_lossy();
-                                trace!(src=%src.display(), dest=%dest.display(), xattr=%name_disp, size=0, "preserved empty xattr");
-                            }
-                        }
-                        Err(e) => {
-                            let name_disp = name.to_string_lossy();
-                            warn!(src=%src.display(), dest=%dest.display(), xattr=%name_disp, error=%e, "failed to read xattr value from source");
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                warn!(src=%src.display(), error=%e, "failed to list xattrs; continuing (best-effort)");
-            }
+    #[test]
+    fn extended_attributes_are_copied() {
+        let temp = tempfile::tempdir().unwrap();
+        let (src, dest) = (temp.path().join("src"), temp.path().join("dest"));
+        fs::write(&src, b"x").unwrap();
+        fs::write(&dest, b"x").unwrap();
+        if xattr::set(&src, "user.aria_move", b"value").is_err() {
+            return; // filesystem without user xattrs (e.g. some tmpfs builds)
         }
-        Ok(())
-    }
-    #[cfg(not(all(unix, feature = "xattrs")))]
-    {
-        let _ = (src, dest); // silence unused warnings
-        Ok(())
+        copy_xattrs(&src, &dest);
+        assert_eq!(
+            xattr::get(&dest, "user.aria_move").unwrap().as_deref(),
+            Some(&b"value"[..])
+        );
     }
 }

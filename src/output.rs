@@ -1,25 +1,19 @@
-use owo_colors::OwoColorize;
-use std::env;
+//! Prefixed, optionally colored terminal messages for humans.
 use std::io::IsTerminal;
 
-#[inline]
-/// Resolve color environment policy for a stream with the supplied terminal status.
+/// Color policy: `NO_COLOR` disables, `CLICOLOR_FORCE=1` forces, `CLICOLOR=0`
+/// disables, otherwise color only when the stream is a terminal.
 pub fn color_enabled(terminal: bool) -> bool {
-    // Respect common env conventions first
-    if env::var_os("NO_COLOR").is_some() {
-        return false;
-    }
-    if let Ok(v) = env::var("CLICOLOR_FORCE")
-        && v == "1"
-    {
-        return true;
-    }
-    if let Ok(v) = env::var("CLICOLOR")
-        && v == "0"
-    {
-        return false;
-    }
-    terminal
+    resolve_color(
+        std::env::var_os("NO_COLOR").is_some(),
+        std::env::var_os("CLICOLOR_FORCE").is_some_and(|v| v == "1"),
+        std::env::var_os("CLICOLOR").is_some_and(|v| v == "0"),
+        terminal,
+    )
+}
+
+fn resolve_color(no_color: bool, force: bool, disabled: bool, terminal: bool) -> bool {
+    !no_color && (force || (!disabled && terminal))
 }
 
 #[derive(Copy, Clone)]
@@ -30,17 +24,18 @@ enum Kind {
     Ok,
 }
 
-#[inline]
 fn format_line(kind: Kind, msg: &str, color: bool) -> String {
-    match (kind, color) {
-        (Kind::Info, true) => format!("{} {}", "info:".cyan().bold(), msg),
-        (Kind::Warn, true) => format!("{} {}", "warn:".yellow().bold(), msg),
-        (Kind::Error, true) => format!("{} {}", "error:".red().bold(), msg),
-        (Kind::Ok, true) => format!("{} {}", "ok:".green().bold(), msg),
-        (Kind::Info, false) => format!("info: {}", msg),
-        (Kind::Warn, false) => format!("warn: {}", msg),
-        (Kind::Error, false) => format!("error: {}", msg),
-        (Kind::Ok, false) => format!("ok: {}", msg),
+    // Bold cyan, yellow, red and green ANSI SGR sequences.
+    let (prefix, sgr) = match kind {
+        Kind::Info => ("info:", "1;36"),
+        Kind::Warn => ("warn:", "1;33"),
+        Kind::Error => ("error:", "1;31"),
+        Kind::Ok => ("ok:", "1;32"),
+    };
+    if color {
+        format!("\x1b[{sgr}m{prefix}\x1b[0m {msg}")
+    } else {
+        format!("{prefix} {msg}")
     }
 }
 
@@ -49,6 +44,17 @@ pub fn print_info(msg: &str) {
         "{}",
         format_line(
             Kind::Info,
+            msg,
+            color_enabled(std::io::stdout().is_terminal())
+        )
+    );
+}
+
+pub fn print_success(msg: &str) {
+    println!(
+        "{}",
+        format_line(
+            Kind::Ok,
             msg,
             color_enabled(std::io::stdout().is_terminal())
         )
@@ -77,45 +83,34 @@ pub fn print_error(msg: &str) {
     );
 }
 
-pub fn print_success(msg: &str) {
-    println!(
-        "{}",
-        format_line(
-            Kind::Ok,
-            msg,
-            color_enabled(std::io::stdout().is_terminal())
-        )
-    );
-}
-
-/// Print a plain user-facing line (no prefix). Use this for primary outputs
-/// such as "Moved X -> Y" which users may script against.
-pub fn print_user(msg: &str) {
-    println!("{}", msg);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn formats_without_color() {
+    fn plain_and_colored_prefixes() {
         assert_eq!(format_line(Kind::Info, "hello", false), "info: hello");
-        assert_eq!(
-            format_line(Kind::Warn, "be careful", false),
-            "warn: be careful"
-        );
+        assert_eq!(format_line(Kind::Warn, "careful", false), "warn: careful");
         assert_eq!(format_line(Kind::Error, "boom", false), "error: boom");
         assert_eq!(format_line(Kind::Ok, "done", false), "ok: done");
+        assert_eq!(
+            format_line(Kind::Error, "boom", true),
+            "\x1b[1;31merror:\x1b[0m boom"
+        );
     }
 
     #[test]
-    fn formats_with_color_prefix() {
-        // We don't hardcode escape sequences; just ensure coloring changes output
-        let plain = format_line(Kind::Info, "hello", false);
-        let colored = format_line(Kind::Info, "hello", true);
-        assert_ne!(plain, colored);
-        assert!(colored.contains("hello"));
-        assert!(colored.contains("info:"));
+    fn color_policy_precedence() {
+        // (NO_COLOR, CLICOLOR_FORCE=1, CLICOLOR=0, terminal) -> enabled
+        let cases = [
+            ((false, false, false, true), true),
+            ((false, false, false, false), false),
+            ((true, true, false, true), false),
+            ((false, true, true, false), true),
+            ((false, false, true, true), false),
+        ];
+        for ((no_color, force, disabled, terminal), expected) in cases {
+            assert_eq!(resolve_color(no_color, force, disabled, terminal), expected);
+        }
     }
 }

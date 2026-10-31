@@ -1,190 +1,200 @@
-//! CLI definition and parsing.
-//! Defines Args and provides parse() for command-line handling.
-//!
-//! Notes:
-//! - --source-path takes precedence over the positional SOURCE_PATH (back-compat).
-//! - --debug is a shorthand for --log-level debug.
-
+//! Command-line interface. aria2 invokes hooks as `<gid> <num_files> <path>`;
+//! a single positional argument is treated as the path.
+use crate::config::{Config, LogLevel};
 use clap::{Parser, ValueHint};
 use std::path::PathBuf;
 
-use crate::config::types::{Config, LogLevel};
-
-/// CLI wrapper for aria_move library.
-/// CLI flags override config values (which are loaded from XML if present).
 #[derive(Parser, Debug, Clone)]
-#[command(
-    author,
-    version,
-    about = "Move completed aria2 downloads safely (Rust)"
-)]
+#[command(author, version, about = "Move completed aria2 downloads safely")]
 pub struct Args {
-    /// Aria2 task id (optional, informational). Ignored for auto-resolution logic.
+    /// aria2 GID (informational). Alone, it is taken as the source path.
     pub task_id: Option<String>,
 
-    /// Number of files reported by aria2 (0 = unknown). Used only for heuristics around legacy positional path fallback.
+    /// Number of files reported by aria2 (informational).
     pub num_files: Option<usize>,
 
-    /// Source path passed by aria2 (positional kept for compatibility).
-    /// Prefer using `--source-path` for clarity; this positional is parsed only if present.
+    /// Source path passed by aria2.
     #[arg(value_name = "SOURCE_PATH", value_hint = ValueHint::AnyPath)]
     pub source_path_pos: Option<PathBuf>,
 
-    /// Explicit source path option — preferred way to specify the path; overrides positional.
-    #[arg(
-        long = "source-path",
-        short = 's',
-        value_name = "PATH",
-        value_hint = ValueHint::AnyPath,
-        help = "Source path (overrides positional)"
-    )]
+    /// Source path; overrides the positional SOURCE_PATH.
+    #[arg(long = "source-path", short = 's', value_name = "PATH", value_hint = ValueHint::AnyPath)]
     pub source_path: Option<PathBuf>,
 
-    /// Override the download base directory (normally configured via XML).
-    #[arg(long, value_hint = ValueHint::DirPath, help = "Override the download base directory")]
+    /// Override the download base directory.
+    #[arg(long, value_hint = ValueHint::DirPath)]
     pub download_base: Option<PathBuf>,
 
-    /// Override the completed base directory (normally configured via XML).
-    #[arg(long, value_hint = ValueHint::DirPath, help = "Override the completed base directory")]
+    /// Override the completed base directory.
+    #[arg(long, value_hint = ValueHint::DirPath)]
     pub completed_base: Option<PathBuf>,
 
-    /// Enable debug logging (equivalent to `--log-level debug`).
-    #[arg(
-        short = 'd',
-        long,
-        help = "Enable debug logging (shorthand for --log-level debug)"
-    )]
+    /// Shorthand for --log-level debug.
+    #[arg(short = 'd', long)]
     pub debug: bool,
 
-    /// Set log level. One of: quiet, normal, info, debug.
-    #[arg(long, value_parser = parse_log_level_argument, help = "Set log level: quiet, normal, info, debug")]
-    pub log_level: Option<String>,
+    /// Log level: quiet, normal, info or debug.
+    #[arg(long, value_name = "LEVEL")]
+    pub log_level: Option<LogLevel>,
 
-    /// Print where aria_move will look for the config file (or ARIA_MOVE_CONFIG if set), then exit.
-    #[arg(
-        long,
-        help = "Print the config file location used by aria_move and exit"
-    )]
+    /// Print the config file location and exit.
+    #[arg(long)]
     pub print_config: bool,
 
-    /// Dry-run: log actions but do not modify the filesystem.
-    #[arg(
-        long,
-        help = "Show what would be done, but do not modify files/directories"
-    )]
+    /// Show what would be moved without modifying anything.
+    #[arg(long)]
     pub dry_run: bool,
 
-    /// Preserve permissions, timestamps and xattrs (when feature enabled). Off by default.
-    #[arg(
-        long,
-        help = "Preserve permissions, timestamps and xattrs (when enabled); slower"
-    )]
+    /// On cross-filesystem copies, preserve permissions, timestamps and xattrs (slower).
+    #[arg(long)]
     pub preserve_metadata: bool,
 
-    /// Preserve only permissions (faster than full metadata). Ignored if --preserve-metadata is also set.
-    #[arg(
-        long,
-        help = "Preserve only permissions (mode/readonly); faster than --preserve-metadata"
-    )]
+    /// On cross-filesystem copies, preserve permissions only.
+    #[arg(long)]
     pub preserve_permissions: bool,
 
-    /// Disable directory locking (for ZFS/NFS/network shares in containers where flock may fail).
-    #[arg(
-        long,
-        help = "Disable directory locking (use for ZFS/NFS/network shares in containers)"
-    )]
+    /// Disable directory locking (for ZFS/NFS/network shares in containers).
+    #[arg(long)]
     pub disable_locks: bool,
 
-    /// Emit logs in structured JSON (includes timestamp, level, and structured fields).
-    #[arg(long, help = "Emit logs in structured JSON")]
+    /// Emit structured JSON logs.
+    #[arg(long)]
     pub json: bool,
 
-    /// Override config.xml path (highest precedence; overrides ARIA_MOVE_CONFIG and defaults)
-    #[arg(
-        long = "config",
-        value_name = "PATH",
-        value_hint = ValueHint::AnyPath,
-        help = "Path to config.xml (highest precedence; overrides ARIA_MOVE_CONFIG and defaults)"
-    )]
+    /// Path to config.xml (overrides ARIA_MOVE_CONFIG and the defaults).
+    #[arg(long = "config", value_name = "PATH", value_hint = ValueHint::AnyPath)]
     pub config_path: Option<PathBuf>,
 }
 
 impl Args {
-    /// Effective source path: `--source-path` if provided, else positional SOURCE_PATH.
-    #[inline]
-    /// Effective source path.
-    ///
-    /// Precedence:
-    /// 1) `--source-path` if provided
-    /// 2) positional `SOURCE_PATH` if provided
-    /// 3) single positional first-argument (task_id) is treated as the path when
-    ///    the user invoked `aria_move <path>` (convenience). This is unconditional
-    ///    when `num_files` and `SOURCE_PATH` are absent.
-    pub fn resolved_source(&self) -> Option<std::path::PathBuf> {
-        if let Some(p) = &self.source_path {
-            return Some(p.clone());
-        }
-        if let Some(p) = &self.source_path_pos {
-            return Some(p.clone());
-        }
-
-        // One-arg convenience: treat first positional as the path when the
-        // aria2 three-argument form is not used and no SOURCE_PATH positional
-        // was provided. We intentionally do NOT try to be clever here: any
-        // single positional is interpreted as a path, and resolution will
-        // fail later if it doesn't exist.
-        if self.num_files.is_none()
-            && self.source_path_pos.is_none()
-            && let Some(t) = &self.task_id
-        {
-            return Some(PathBuf::from(t));
-        }
-
-        None
+    /// `--source-path`, else the positional SOURCE_PATH, else a lone first
+    /// positional (`aria_move <path>`).
+    pub fn resolved_source(&self) -> Option<PathBuf> {
+        self.source_path
+            .clone()
+            .or_else(|| self.source_path_pos.clone())
+            .or_else(|| {
+                self.num_files
+                    .is_none()
+                    .then(|| self.task_id.as_ref().map(PathBuf::from))
+                    .flatten()
+            })
     }
 
-    /// Effective log level derived from flags.
-    /// Precedence: --debug > --log-level value > None (use config default).
+    /// `--debug` wins over `--log-level`.
     pub fn effective_log_level(&self) -> Option<LogLevel> {
         if self.debug {
-            return Some(LogLevel::Debug);
+            Some(LogLevel::Debug)
+        } else {
+            self.log_level
         }
-        self.log_level.as_deref().and_then(LogLevel::parse)
     }
 
-    /// Apply CLI overrides to a loaded Config (in-place). No-ops for unset flags.
+    /// Apply the flags that were given; unset flags keep the config's values.
     pub fn apply_overrides(&self, cfg: &mut Config) {
-        if let Some(db) = &self.download_base {
-            cfg.download_base = db.clone();
+        if let Some(path) = &self.download_base {
+            cfg.download_base.clone_from(path);
         }
-        if let Some(cb) = &self.completed_base {
-            cfg.completed_base = cb.clone();
+        if let Some(path) = &self.completed_base {
+            cfg.completed_base.clone_from(path);
         }
         if let Some(level) = self.effective_log_level() {
             cfg.log_level = level;
         }
-        if self.dry_run {
-            cfg.dry_run = true;
-        }
-        if self.preserve_metadata {
-            cfg.preserve_metadata = true;
-        }
-        if self.preserve_permissions {
-            cfg.preserve_permissions = true;
-        }
-        if cfg.preserve_metadata {
-            cfg.preserve_permissions = false;
-        }
-        if self.disable_locks {
-            cfg.disable_locks = true;
-        }
+        cfg.dry_run |= self.dry_run;
+        cfg.preserve_metadata |= self.preserve_metadata;
+        cfg.preserve_permissions |= self.preserve_permissions;
+        cfg.disable_locks |= self.disable_locks;
     }
 }
 
-pub fn parse() -> Args {
-    Args::parse()
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-fn parse_log_level_argument(value: &str) -> Result<String, String> {
-    value.parse::<LogLevel>().map(|_| value.to_owned())
+    fn parse(args: &[&str]) -> Args {
+        Args::try_parse_from(std::iter::once("aria_move").chain(args.iter().copied())).unwrap()
+    }
+
+    #[test]
+    fn source_precedence() {
+        let cases: [(&[&str], Option<&str>); 6] = [
+            (&["gid", "1", "/pos"], Some("/pos")),
+            (
+                &["--source-path", "/flag", "gid", "1", "/pos"],
+                Some("/flag"),
+            ),
+            (&["-s", "/flag"], Some("/flag")),
+            (&["file.iso"], Some("file.iso")),
+            (&["gid", "1"], None),
+            (&[], None),
+        ];
+        for (args, expected) in cases {
+            assert_eq!(
+                parse(args).resolved_source(),
+                expected.map(PathBuf::from),
+                "{args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn log_level_flags() {
+        assert_eq!(
+            parse(&["--debug", "--log-level", "quiet"]).effective_log_level(),
+            Some(LogLevel::Debug)
+        );
+        assert_eq!(
+            parse(&["--log-level", "VERBOSE"]).effective_log_level(),
+            Some(LogLevel::Info)
+        );
+        assert_eq!(parse(&[]).effective_log_level(), None);
+        assert!(Args::try_parse_from(["aria_move", "--log-level", "loud"]).is_err());
+    }
+
+    #[test]
+    fn invalid_argument_shapes_are_rejected() {
+        for args in [
+            &["aria_move", "gid", "not-a-number", "/p"][..],
+            &["aria_move", "gid", "1", "/p", "extra"][..],
+        ] {
+            assert!(Args::try_parse_from(args).is_err(), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn overrides_apply_only_when_given() {
+        let mut cfg = Config::new("/in", "/out");
+        cfg.disable_locks = true;
+        parse(&[]).apply_overrides(&mut cfg);
+        assert_eq!(cfg.download_base, PathBuf::from("/in"));
+        assert!(cfg.disable_locks && !cfg.dry_run);
+
+        parse(&[
+            "--download-base",
+            "/db",
+            "--completed-base",
+            "/cb",
+            "--log-level",
+            "info",
+            "--dry-run",
+            "--preserve-metadata",
+            "--preserve-permissions",
+            "--disable-locks",
+        ])
+        .apply_overrides(&mut cfg);
+        assert_eq!(
+            cfg,
+            Config {
+                download_base: "/db".into(),
+                completed_base: "/cb".into(),
+                log_level: LogLevel::Info,
+                log_file: None,
+                dry_run: true,
+                preserve_metadata: true,
+                preserve_permissions: true,
+                disable_locks: true,
+            }
+        );
+    }
 }

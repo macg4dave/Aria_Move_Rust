@@ -1,59 +1,39 @@
 #!/usr/bin/env bash
+# Build a release binary (and, with --deb, a Debian package) inside a Debian
+# container so it links against Debian's glibc. Output lands in the host's
+# target/ directory. Tests run separately: scripts/test-linux.sh.
+#
+#   scripts/docker-build.sh [--deb] [--rebuild]
 set -euo pipefail
 
-# Build (debug) + test the project inside a Debian-based Rust container so produced binaries
-# are linked against Debian glibc and system libraries. Run from repo root.
-# By default this performs a debug build and runs all tests.
-# Use --deb to additionally build a release binary and produce a .deb.
-# Usage: ./scripts/docker-build.sh [--deb]
-
-ROOT=$(pwd)
 IMAGE_TAG="aria_move_build:1.99-bookworm"
 DOCKERFILE="docker/Dockerfile.build"
-DEB_OUTPUT_DIR="$ROOT/target/debian"
-
-REBUILD=false
-
+ROOT="$(cd "$(dirname "$0")/.." && (pwd -W 2>/dev/null || pwd))"
 MAKE_DEB=false
+REBUILD=false
 for arg in "$@"; do
   case "$arg" in
     --deb) MAKE_DEB=true ;;
     --rebuild) REBUILD=true ;;
-    *) ;;
+    *) echo "unknown option: $arg" >&2; exit 2 ;;
   esac
 done
 
-# Ensure output dir exists on host
-mkdir -p "$DEB_OUTPUT_DIR"
-
-# Build (or reuse cached) image that already has dependencies fetched.
-if [ "$REBUILD" = true ]; then
-  echo "[docker-build] Rebuilding image without cache..."
-  docker build --no-cache -f "$DOCKERFILE" -t "$IMAGE_TAG" .
-elif ! docker image inspect "$IMAGE_TAG" >/dev/null 2>&1; then
-  echo "[docker-build] Building image $IMAGE_TAG (first time)..."
-  docker build -f "$DOCKERFILE" -t "$IMAGE_TAG" .
-else
-  echo "[docker-build] Using cached image $IMAGE_TAG"
+if [ "$REBUILD" = true ] || ! docker image inspect "$IMAGE_TAG" >/dev/null 2>&1; then
+  docker build ${REBUILD:+$([ "$REBUILD" = true ] && echo --no-cache)} -f "$DOCKERFILE" -t "$IMAGE_TAG" "$ROOT"
 fi
 
-# Mount host Cargo cache for even faster incremental builds (optional but helpful).
-CARGO_HOME_HOST="${CARGO_HOME:-$HOME/.cargo}"
-mkdir -p "$CARGO_HOME_HOST/registry" "$CARGO_HOME_HOST/git"
-
-docker run --rm \
-  -e DEBIAN_FRONTEND=noninteractive \
+MSYS_NO_PATHCONV=1 docker run --rm \
   -e MAKE_DEB="$MAKE_DEB" \
-  -v "$ROOT":/work \
-  -v "$CARGO_HOME_HOST/registry":/usr/local/cargo/registry \
-  -v "$CARGO_HOME_HOST/git":/usr/local/cargo/git \
-  -w /work "$IMAGE_TAG" \
-  bash /work/scripts/docker-build-in-container.sh
-
-if [ "$MAKE_DEB" = true ]; then
-  echo "Debian packages (if produced) are in: $DEB_OUTPUT_DIR"
-fi
-echo "Debug build output is in: target/debug/"
-echo "Tests executed inside container (dependencies cached)."
-
+  --mount "type=bind,source=$ROOT,target=/work" \
+  --mount "type=volume,source=aria_move_registry_amd64,target=/usr/local/cargo/registry" \
+  -w /work "$IMAGE_TAG" bash -euo pipefail -c '
+    cargo build --release --locked
+    if [ "$MAKE_DEB" = true ]; then
+      command -v cargo-deb >/dev/null || cargo install cargo-deb --locked
+      cargo deb --no-build --no-strip
+    fi
+  '
+echo "Release binary: target/release/aria_move"
+[ "$MAKE_DEB" = true ] && echo "Debian package: target/debian/"
 exit 0

@@ -1,150 +1,113 @@
-//! Cancellable directory locks. Lock failures never silently disable protection.
-use std::fs::{File, OpenOptions};
+//! Cancellable directory locks. A lock failure is an error, never a silent
+//! downgrade; `disable_locks` is the explicit opt-out.
+use crate::{platform, shutdown};
+use anyhow::Result;
+use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// An exclusive directory lock, released when the guard is dropped.
+const RETRY_INTERVAL: Duration = Duration::from_millis(25);
+
+/// An exclusive directory lock, released on drop.
+#[derive(Debug)]
 pub struct DirLock {
-    _file: File,
+    _handle: File,
 }
 
-/// Wait for a directory lock, checking cancellation between nonblocking attempts.
-pub fn acquire_dir_lock(dir: &Path) -> io::Result<DirLock> {
+/// Wait for an exclusive lock on `dir`, polling so cancellation is honoured.
+pub fn acquire_dir_lock(dir: &Path) -> Result<DirLock> {
     tracing::debug!(path = %dir.display(), "Waiting for directory lock");
     loop {
-        if crate::shutdown::is_requested() {
-            return Err(io::Error::new(
-                io::ErrorKind::Interrupted,
-                crate::AriaMoveError::Interrupted,
-            ));
-        }
-        if let Some(lock) = try_acquire_dir_lock(dir)? {
-            return Ok(lock);
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-}
-
-/// Attempt an exclusive lock without waiting. Unix locks the directory inode;
-/// Windows holds an exclusive, delete-on-close sidecar handle.
-pub fn try_acquire_dir_lock(dir: &Path) -> io::Result<Option<DirLock>> {
-    crate::config::paths::reject_symlinks(dir)?;
-    #[cfg(unix)]
-    {
-        use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
-        let file = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(dir)?;
-        // SAFETY: file owns a valid directory fd. Nonblocking flock has no borrowed pointers.
-        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-            return Ok(Some(DirLock { _file: file }));
-        }
-        let error = io::Error::last_os_error();
-        if error.kind() == io::ErrorKind::WouldBlock {
-            Ok(None)
-        } else {
-            Err(error)
-        }
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        use windows_sys::Win32::Storage::FileSystem::{
-            FILE_ATTRIBUTE_HIDDEN, FILE_FLAG_DELETE_ON_CLOSE, FILE_FLAG_OPEN_REPARSE_POINT,
-        };
-        let path = dir.join(".aria_move.dir.lock");
-        crate::config::paths::reject_symlinks(&path)?;
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .access_mode(0x8000_0000 | 0x4000_0000 | 0x0001_0000) // READ | WRITE | DELETE
-            .share_mode(0)
-            .custom_flags(
-                FILE_ATTRIBUTE_HIDDEN | FILE_FLAG_DELETE_ON_CLOSE | FILE_FLAG_OPEN_REPARSE_POINT,
-            )
-            .open(&path);
-        match file {
-            Ok(file) => {
-                if crate::config::paths::is_link(&file.metadata()?) {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "lock is a reparse point",
-                    ));
-                }
-                Ok(Some(DirLock { _file: file }))
+        shutdown::check()?;
+        match platform::try_lock_directory(dir) {
+            Ok(Some(handle)) => return Ok(DirLock { _handle: handle }),
+            Ok(None) => std::thread::sleep(RETRY_INTERVAL),
+            Err(error) => {
+                let denied = error.kind() == io::ErrorKind::PermissionDenied;
+                let error = crate::errors::io_error("lock directory", dir, error);
+                return Err(if denied {
+                    error.context("directory locking failed; on ZFS/NFS or container mounts that reject locks, use --disable-locks")
+                } else {
+                    error
+                });
             }
-            Err(e) if e.raw_os_error() == Some(32) => Ok(None),
-            Err(e) => Err(e),
         }
     }
 }
 
-/// Lock the source's parent directory.
-pub fn acquire_move_lock(src: &Path) -> io::Result<DirLock> {
-    acquire_dir_lock(
-        src.parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new(".")),
-    )
-}
-
-/// Use one deterministic order for all operations, including reversed base pairs.
-/// Deduplication also avoids self-deadlocking when both parents are the same inode.
+/// Lock the source's parent and the destination directory, in one global
+/// order so concurrent movers cannot deadlock; a shared directory is locked once.
 pub(super) fn acquire_move_locks(
     src: &Path,
-    destination: &Path,
+    dest_dir: &Path,
     disabled: bool,
-) -> crate::AMResult<Vec<DirLock>> {
+) -> Result<Vec<DirLock>> {
     if disabled {
         return Ok(Vec::new());
     }
-    let parent = src
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    let mut dirs: Vec<PathBuf> = vec![
-        dunce::canonicalize(parent)?,
-        dunce::canonicalize(destination)?,
-    ];
+    let mut dirs: Vec<PathBuf> = [platform::parent_dir(src), dest_dir]
+        .into_iter()
+        .map(dunce::canonicalize)
+        .collect::<io::Result<_>>()?;
     dirs.sort();
     dirs.dedup();
-    let mut locks = Vec::new();
-    for dir in dirs {
-        crate::shutdown::check()?;
-        match acquire_dir_lock(&dir) {
-            Ok(lock) => locks.push(lock),
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => {
-                return Err(crate::AriaMoveError::Interrupted.into());
-            }
-            Err(e) => return Err(super::helpers::io_error_with_help("acquire lock", &dir)(e)),
-        }
-    }
-    Ok(locks)
+    dirs.iter().map(|dir| acquire_dir_lock(dir)).collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::AriaMoveError;
+
     #[test]
-    fn cancellation_interrupts_a_contended_lock() -> crate::AMResult<()> {
-        let _guard = crate::shutdown::test_guard();
-        let td = tempfile::tempdir()?;
-        let held = acquire_dir_lock(td.path())?;
-        let path = td.path().to_path_buf();
-        let (sender, receiver) = std::sync::mpsc::channel();
-        let worker = std::thread::spawn(move || {
-            let result = acquire_dir_lock(&path).map(|_| ()).map_err(|e| e.kind());
-            sender.send(result).unwrap();
-        });
-        crate::shutdown::request();
-        let result = receiver.recv_timeout(Duration::from_secs(3));
+    fn cancellation_interrupts_a_contended_wait() -> Result<()> {
+        let _guard = shutdown::test_guard();
+        let temp = tempfile::tempdir()?;
+        let held = acquire_dir_lock(temp.path())?;
+        let path = temp.path().to_path_buf();
+        let waiter = std::thread::spawn(move || acquire_dir_lock(&path).map(drop));
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!waiter.is_finished(), "must wait while the lock is held");
+        shutdown::request();
+        let error = waiter.join().unwrap().unwrap_err();
         drop(held);
-        worker.join().unwrap();
-        assert_eq!(result?, Err(io::ErrorKind::Interrupted));
+        assert_eq!(
+            error.downcast_ref::<AriaMoveError>(),
+            Some(&AriaMoveError::Interrupted)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_waiter_proceeds_once_the_holder_releases() -> Result<()> {
+        let _guard = shutdown::test_guard();
+        let temp = tempfile::tempdir()?;
+        let held = acquire_dir_lock(temp.path())?;
+        let path = temp.path().to_path_buf();
+        let waiter = std::thread::spawn(move || acquire_dir_lock(&path).map(drop));
+        std::thread::sleep(Duration::from_millis(100));
+        drop(held);
+        waiter.join().unwrap()?;
+        Ok(())
+    }
+
+    #[test]
+    fn move_locks_cover_both_directories_once() -> Result<()> {
+        let _guard = shutdown::test_guard();
+        let temp = tempfile::tempdir()?;
+        let (incoming, completed) = (temp.path().join("in"), temp.path().join("out"));
+        std::fs::create_dir(&incoming)?;
+        std::fs::create_dir(&completed)?;
+        let locks = acquire_move_locks(&incoming.join("file"), &completed, false)?;
+        assert_eq!(locks.len(), 2);
+        assert!(platform::try_lock_directory(&incoming)?.is_none());
+        assert!(platform::try_lock_directory(&completed)?.is_none());
+        drop(locks);
+        let same = acquire_move_locks(&completed.join("file"), &completed, false)?;
+        assert_eq!(same.len(), 1, "a shared directory must not self-deadlock");
+        drop(same);
+        assert!(acquire_move_locks(&incoming.join("file"), &completed, true)?.is_empty());
         Ok(())
     }
 }
