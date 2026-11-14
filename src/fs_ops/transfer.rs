@@ -17,7 +17,31 @@ pub(super) struct Snapshot {
     identity: (u64, u64),
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("{message}: {} (size: {} -> {}; modified: {:?} -> {:?}; identity: {:?} -> {:?})",
+    path.display(), expected.len, actual.len, expected.modified, actual.modified,
+    expected.identity, actual.identity)]
+pub(super) struct SourceChanged {
+    message: String,
+    path: std::path::PathBuf,
+    expected: Snapshot,
+    actual: Snapshot,
+}
+
+impl SourceChanged {
+    pub(super) fn timestamp_only(&self) -> bool {
+        self.expected.len == self.actual.len
+            && self.expected.identity == self.actual.identity
+            && self.expected.modified != self.actual.modified
+    }
+}
+
 impl Snapshot {
+    pub(super) fn check_identity_and_size(&self, actual: &Self, path: &Path) -> Result<()> {
+        let mut expected = *self;
+        expected.modified = actual.modified;
+        expected.check_matches(actual, path, "source size or identity changed before retry")
+    }
     pub(super) fn new(file: &File, meta: &Metadata) -> Result<Self> {
         let directory = meta.is_dir();
         Ok(Self {
@@ -37,11 +61,19 @@ impl Snapshot {
 
     /// Fail if the open file no longer matches this snapshot.
     pub(super) fn check(&self, file: &File, path: &Path) -> Result<()> {
-        ensure!(
-            *self == Self::of(file)?,
-            "source changed during the move: {}",
-            path.display()
-        );
+        self.check_matches(&Self::of(file)?, path, "source changed during the move")
+    }
+
+    pub(super) fn check_matches(&self, actual: &Self, path: &Path, message: &str) -> Result<()> {
+        if self != actual {
+            return Err(SourceChanged {
+                message: message.to_owned(),
+                path: path.to_owned(),
+                expected: *self,
+                actual: *actual,
+            }
+            .into());
+        }
         Ok(())
     }
 }
@@ -183,6 +215,36 @@ mod tests {
         fs::write(&other, b"three")?;
         let replacement = Snapshot::of(&File::open(&other)?)?;
         assert_ne!(snapshot.identity, replacement.identity);
+        Ok(())
+    }
+
+    #[test]
+    fn timestamp_only_changes_are_reported_without_claiming_size_or_identity_changed() -> Result<()>
+    {
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("file");
+        fs::write(&path, b"unchanged bytes")?;
+        let before = filetime::FileTime::from_unix_time(1_700_000_000, 0);
+        let after = filetime::FileTime::from_unix_time(1_700_000_001, 0);
+        filetime::set_file_mtime(&path, before)?;
+        let snapshot = Snapshot::of(&File::open(&path)?)?;
+        filetime::set_file_mtime(&path, after)?;
+        let actual = Snapshot::of(&File::open(&path)?)?;
+        assert_eq!(snapshot.len, actual.len);
+        assert_eq!(snapshot.identity, actual.identity);
+        assert_ne!(snapshot.modified, actual.modified);
+        let error = snapshot.check(&File::open(&path)?, &path).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("source changed during the move"),
+            "{message}"
+        );
+        assert!(message.contains("size: 15 -> 15"), "{message}");
+        assert!(
+            message.contains("modified:") && message.contains("identity:"),
+            "{message}"
+        );
+        assert_eq!(fs::read(path)?, b"unchanged bytes");
         Ok(())
     }
 }

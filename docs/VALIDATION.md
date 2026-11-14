@@ -52,6 +52,42 @@ macOS retains its native implementation; this pass adds no macOS test requiremen
 
 ## Move logic regression coverage
 
+The November 2026 concurrency tests can be run with:
+
+```sh
+cargo test --locked --test concurrent_hooks -- --nocapture
+cargo test --locked concurrent_distinct_downloads_finish_for_both_strategies
+```
+
+The hook tests launch 24 separate binary processes using aria2's GID/count/path
+arguments, sharing a configuration and verbose log. They mix distinct names,
+Unicode, spaces, empty files, sizes around the 1 MiB copy buffer boundary and
+multi-file download trees. They check exit status, every output byte, source
+removal, staging/lock cleanup and completion records, with a 60-second deadline
+and child cleanup on failure. Another test holds one source lock, verifies eight
+sibling hooks finish while that hook waits, then releases it and checks that the
+waiting hook finishes. The cross-filesystem batch reports a skip without a
+second filesystem; the unit test always exercises concurrent forced copies as
+well as renames. These tests invoke the hook binary directly; they do not launch
+aria2 itself or simulate a network share.
+
+Source-change regression tests cover timestamp updates before and after copying,
+including a same-length content update before copying. Timestamp-only snapshot
+mismatches before publication discard staging and retry with a fresh inventory
+and full verified copy, up to three attempts with a cancellable one-second pause.
+Every refreshed inventory must retain the original sizes, identities and tree
+entries. Tests verify recovery, exhaustion without publication, cancellation,
+refusal of replacements/size/tree changes and source retention after publication.
+Source snapshot errors include the old/new byte length, modification time and
+filesystem identity so SMB/ZFS reports can distinguish the failing comparison.
+These checks remain strict within each attempt: matching lengths alone do not
+justify deleting a source. Post-publication failures never restart the move.
+
+Verified on 14 November 2026 in an amd64 Linux Docker container as an
+unprivileged user: default and all-feature Clippy, tests and documentation tests
+passed. All three hook concurrency tests executed, including the real
+cross-filesystem batch using `/dev/shm`; that check was skipped on Windows.
+
 The October 2026 logic review added checks that single-file hooks and explicit
 nested paths leave sibling downloads untouched, while multi-file hooks still
 move their download folder. Both rename and copy paths accept completed .tmp,

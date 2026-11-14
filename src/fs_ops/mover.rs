@@ -20,7 +20,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 /// One file or directory of the source. The root has an empty relative path.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Entry {
     relative: PathBuf,
     directory: bool,
@@ -219,6 +219,74 @@ fn copy_then_remove(
     dest: &Path,
     entries: &[Entry],
 ) -> Result<PathBuf> {
+    let (stage, staged, current) = stage_with_retries(src, entries, |current| {
+        stage_copy(config, src, dest, current)
+    })?;
+    publish_copy(config, src, dest, &current, stage, staged)
+}
+
+fn stage_with_retries(
+    src: &Path,
+    entries: &[Entry],
+    mut prepare: impl FnMut(&[Entry]) -> Result<(tempfile::TempDir, PathBuf)>,
+) -> Result<(tempfile::TempDir, PathBuf, Vec<Entry>)> {
+    let mut current = entries.to_vec();
+    let mut attempt = 0;
+    let (stage, staged) = loop {
+        attempt += 1;
+        match prepare(&current) {
+            Ok(staged) => break staged,
+            Err(error)
+                if attempt < 3
+                    && error
+                        .downcast_ref::<transfer::SourceChanged>()
+                        .is_some_and(|changed| changed.timestamp_only()) =>
+            {
+                tracing::warn!(source = %src.display(), attempt, %error,
+                    "Source timestamp changed; retrying verified copy before publication");
+                // Allow an attribute-cache refresh without an unbounded wait.
+                // Staging was dropped before this wait; cancellation stays prompt.
+                for _ in 0..40 {
+                    shutdown::check()?;
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                let next = inventory(src)?;
+                check_inventory_identity(src, entries, &next)?;
+                current = next;
+            }
+            Err(error) => return Err(error),
+        }
+    };
+    Ok((stage, staged, current))
+}
+
+/// A retry may refresh timestamps, but must not silently accept a replacement,
+/// growth/shrinkage or a changed directory tree while waiting.
+fn check_inventory_identity(src: &Path, expected: &[Entry], actual: &[Entry]) -> Result<()> {
+    ensure!(
+        actual.len() == expected.len(),
+        "source entries changed before retry: {}",
+        src.display()
+    );
+    for (expected, actual) in expected.iter().zip(actual) {
+        ensure!(
+            expected.relative == actual.relative && expected.directory == actual.directory,
+            "source entries changed before retry: {}",
+            src.display()
+        );
+        expected
+            .snapshot
+            .check_identity_and_size(&actual.snapshot, &at(src, &expected.relative))?;
+    }
+    Ok(())
+}
+
+fn stage_copy(
+    config: &Config,
+    src: &Path,
+    dest: &Path,
+    entries: &[Entry],
+) -> Result<(tempfile::TempDir, PathBuf)> {
     let required = entries
         .iter()
         .try_fold(0u64, |sum, e| sum.checked_add(e.snapshot.len))
@@ -266,20 +334,16 @@ fn copy_then_remove(
                 .open(&target)
                 .map_err(|e| errors::io_error("create", &target, e))?;
             let (snapshot, meta) = transfer::copy_file(&source, &mut file)?;
-            ensure!(
-                snapshot == entry.snapshot,
-                "source changed since it was inventoried: {}",
-                source.display()
-            );
+            entry.snapshot.check_matches(
+                &snapshot,
+                &source,
+                "source changed since it was inventoried",
+            )?;
             drop(file);
             metadata::apply(config, &source, &target, &meta);
             Ok(())
         })?;
-    ensure!(
-        inventory(src)? == entries,
-        "source changed during copy: {}",
-        src.display()
-    );
+    check_inventory(src, entries, "source changed during copy")?;
     // Directory metadata last and deepest first, so children cannot disturb it.
     for entry in entries.iter().rev().filter(|e| e.directory) {
         let (source, target) = (at(src, &entry.relative), at(&staged, &entry.relative));
@@ -287,6 +351,37 @@ fn copy_then_remove(
         platform::sync_directory(&target)?;
     }
 
+    Ok((stage, staged))
+}
+
+fn check_inventory(src: &Path, expected: &[Entry], message: &str) -> Result<()> {
+    let actual = inventory(src)?;
+    ensure!(
+        actual.len() == expected.len(),
+        "{message}: {} (entry count changed)",
+        src.display()
+    );
+    for (expected, actual) in expected.iter().zip(&actual) {
+        ensure!(
+            expected.relative == actual.relative && expected.directory == actual.directory,
+            "{message}: {} (entries changed)",
+            src.display()
+        );
+        expected
+            .snapshot
+            .check_matches(&actual.snapshot, &at(src, &expected.relative), message)?;
+    }
+    Ok(())
+}
+
+fn publish_copy(
+    config: &Config,
+    src: &Path,
+    dest: &Path,
+    entries: &[Entry],
+    stage: tempfile::TempDir,
+    staged: PathBuf,
+) -> Result<PathBuf> {
     shutdown::check()?;
     let candidate = dest.to_path_buf();
     let mut dest = candidate.clone();
@@ -317,11 +412,7 @@ fn copy_then_remove(
             src.display()
         )
     };
-    ensure!(
-        inventory(src).with_context(retained)? == entries,
-        "{}: it changed after copying",
-        retained()
-    );
+    check_inventory(src, entries, "source changed after copying").with_context(retained)?;
     for entry in entries.iter().rev() {
         shutdown::check().with_context(retained)?;
         let source = at(src, &entry.relative);
@@ -433,6 +524,63 @@ mod tests {
     }
 
     const STRATEGIES: [bool; 2] = [false, true];
+
+    #[test]
+    fn concurrent_distinct_downloads_finish_for_both_strategies() -> Result<()> {
+        let _guard = shutdown::test_guard();
+        for force_copy in STRATEGIES {
+            let fx = Fixture::new();
+            let downloads: Vec<_> = (0..16)
+                .map(|index| {
+                    let bytes: Vec<_> = (0..(index * 131_073))
+                        .map(|offset| ((offset + index) % 251) as u8)
+                        .collect();
+                    let name = format!("download {index}");
+                    let tree = index % 2 == 1;
+                    let source = if tree {
+                        fx.write(&format!("{name}/nested/file.bin"), &bytes);
+                        fx.write(&format!("{name}/second.txt"), b"second");
+                        fx.incoming(&name)
+                    } else {
+                        fx.write(&name, &bytes)
+                    };
+                    (source, bytes, tree)
+                })
+                .collect();
+            let barrier = std::sync::Barrier::new(downloads.len());
+            std::thread::scope(|scope| -> Result<()> {
+                let handles: Vec<_> = downloads
+                    .iter()
+                    .map(|(source, bytes, tree)| {
+                        let barrier = &barrier;
+                        let config = &fx.config;
+                        scope.spawn(move || -> Result<()> {
+                            barrier.wait();
+                            let dest = move_with(config, source, force_copy)?;
+                            let file = if *tree {
+                                dest.join("nested/file.bin")
+                            } else {
+                                dest.clone()
+                            };
+                            assert_eq!(&fs::read(file)?, bytes);
+                            if *tree {
+                                assert_eq!(fs::read(dest.join("second.txt"))?, b"second");
+                            }
+                            assert!(!source.exists());
+                            Ok(())
+                        })
+                    })
+                    .collect();
+                for handle in handles {
+                    handle.join().unwrap()?;
+                }
+                Ok(())
+            })?;
+            assert_eq!(fx.completed_names().len(), downloads.len());
+            assert_eq!(fs::read_dir(&fx.config.download_base)?.count(), 0);
+        }
+        Ok(())
+    }
 
     #[test]
     fn files_move_with_identical_bytes() -> Result<()> {
@@ -685,6 +833,180 @@ mod tests {
         assert!(error.to_string().contains("changed"), "{error}");
         assert_eq!(fs::read(&src)?, b"changed!");
         assert!(fx.completed_names().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn timestamp_changes_retry_a_fresh_verified_copy_before_publication() -> Result<()> {
+        let _guard = shutdown::test_guard();
+        for timestamp_only in [false, true] {
+            let fx = Fixture::new();
+            let source = fx.write("file.bin", b"original");
+            filetime::set_file_mtime(
+                &source,
+                filetime::FileTime::from_unix_time(1_700_000_000, 0),
+            )?;
+            let entries = inventory(&source)?;
+            if !timestamp_only {
+                fs::write(&source, b"modified")?;
+            }
+            filetime::set_file_mtime(
+                &source,
+                filetime::FileTime::from_unix_time(1_700_000_001, 0),
+            )?;
+            let dest = fx.config.completed_base.join("file.bin");
+            let error = stage_copy(&fx.config, &source, &dest, &entries).unwrap_err();
+            let message = error.to_string();
+            assert!(
+                message.contains("source changed since it was inventoried"),
+                "{message}"
+            );
+            assert!(message.contains("size: 8 -> 8"), "{message}");
+            assert!(message.contains("modified:"), "{message}");
+            let expected = if timestamp_only {
+                b"original"
+            } else {
+                b"modified"
+            };
+            assert_eq!(fs::read(&source)?, expected);
+            assert!(fx.completed_names().is_empty());
+            // The same hook refreshes its inventory and recopies verified bytes.
+            let dest = copy_then_remove(&fx.config, &source, &dest, &entries)?;
+            assert_eq!(fs::read(dest)?, expected);
+            assert!(!source.exists());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn continuously_changing_timestamps_exhaust_three_attempts_without_publication() -> Result<()> {
+        let _guard = shutdown::test_guard();
+        let fx = Fixture::new();
+        let source = fx.write("file.bin", b"unchanged");
+        let dest = fx.config.completed_base.join("file.bin");
+        let entries = inventory(&source)?;
+        let mut attempts = 0;
+        let error = stage_with_retries(&source, &entries, |current| {
+            attempts += 1;
+            filetime::set_file_mtime(
+                &source,
+                filetime::FileTime::from_unix_time(1_700_000_000 + attempts, 0),
+            )?;
+            stage_copy(&fx.config, &source, &dest, current)
+        })
+        .unwrap_err();
+        assert_eq!(attempts, 3);
+        assert!(
+            error
+                .downcast_ref::<transfer::SourceChanged>()
+                .unwrap()
+                .timestamp_only()
+        );
+        assert_eq!(fs::read(source)?, b"unchanged");
+        assert!(fx.completed_names().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn timestamp_update_after_copy_retries_and_cancellation_interrupts_retry_wait() -> Result<()> {
+        let _guard = shutdown::test_guard();
+        for cancel in [false, true] {
+            let fx = Fixture::new();
+            let source = fx.write("file.bin", b"complete payload");
+            let dest = fx.config.completed_base.join("file.bin");
+            filetime::set_file_mtime(
+                &source,
+                filetime::FileTime::from_unix_time(1_700_000_000, 0),
+            )?;
+            let entries = inventory(&source)?;
+            let mut attempts = 0;
+            let result = stage_with_retries(&source, &entries, |current| {
+                attempts += 1;
+                let staged = stage_copy(&fx.config, &source, &dest, current)?;
+                if attempts == 1 {
+                    filetime::set_file_mtime(
+                        &source,
+                        filetime::FileTime::from_unix_time(1_700_000_001, 0),
+                    )?;
+                    if cancel {
+                        shutdown::request();
+                    }
+                }
+                current[0]
+                    .snapshot
+                    .check(&open_entry(&source, false)?, &source)?;
+                Ok(staged)
+            });
+            if cancel {
+                assert_eq!(errors::error_code(&result.unwrap_err()), "interrupted");
+                assert_eq!(attempts, 1);
+                assert!(fx.completed_names().is_empty());
+                assert_eq!(fs::read(source)?, b"complete payload");
+            } else {
+                let (stage, staged, current) = result?;
+                assert_eq!(attempts, 2);
+                // Only the successful attempt's staging directory survives.
+                assert_eq!(fx.completed_names().len(), 1);
+                publish_copy(&fx.config, &source, &dest, &current, stage, staged)?;
+                assert_eq!(fs::read(dest)?, b"complete payload");
+                assert!(!source.exists());
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn retries_refuse_replacements_size_changes_and_changed_tree_entries() -> Result<()> {
+        let _guard = shutdown::test_guard();
+        for change in ["replace", "resize", "add", "remove"] {
+            let fx = Fixture::new();
+            let file = fx.write("tree/file.bin", b"original");
+            let source = fx.incoming("tree");
+            let entries = inventory(&source)?;
+            match change {
+                "replace" => {
+                    let replacement = fx.write("replacement", b"original");
+                    fs::remove_file(&file)?;
+                    fs::rename(replacement, &file)?;
+                }
+                "resize" => fs::write(&file, b"longer contents")?,
+                "add" => {
+                    fx.write("tree/extra.bin", b"extra");
+                }
+                "remove" => fs::remove_file(&file)?,
+                _ => unreachable!(),
+            }
+            assert!(
+                check_inventory_identity(&source, &entries, &inventory(&source)?).is_err(),
+                "{change}"
+            );
+            assert!(source.exists());
+            assert!(fx.completed_names().is_empty());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn timestamp_changes_after_publication_retain_source_without_retrying() -> Result<()> {
+        let _guard = shutdown::test_guard();
+        let fx = Fixture::new();
+        let source = fx.write("file.bin", b"verified");
+        let dest = fx.config.completed_base.join("file.bin");
+        filetime::set_file_mtime(
+            &source,
+            filetime::FileTime::from_unix_time(1_700_000_000, 0),
+        )?;
+        let entries = inventory(&source)?;
+        let (stage, staged) = stage_copy(&fx.config, &source, &dest, &entries)?;
+        filetime::set_file_mtime(
+            &source,
+            filetime::FileTime::from_unix_time(1_700_000_001, 0),
+        )?;
+        let error = publish_copy(&fx.config, &source, &dest, &entries, stage, staged).unwrap_err();
+        assert!(format!("{error:#}").contains("retained"));
+        assert_eq!(fs::read(source)?, b"verified");
+        assert_eq!(fs::read(dest)?, b"verified");
+        assert_eq!(fx.completed_names(), ["file.bin"]);
         Ok(())
     }
 
