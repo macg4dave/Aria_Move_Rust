@@ -1,3 +1,13 @@
+aria-move (1.5.2) unstable; urgency=medium
+
+  * Recover from timestamp-only changes on completed SMB downloads by retrying
+    verified copies before publication and reverifying published bytes before
+    source cleanup. Keep size, identity and content checks strict.
+  * Include old/new source metadata in change diagnostics.
+  * Add concurrent completion-hook, real-share and Debian 13 virtual-disk tests.
+
+ -- Dave <macg4dave@users.noreply.github.com>  Sat, 14 Nov 2026 12:00:00 +0000
+
 aria-move (1.5.1) unstable; urgency=medium
 
   * Rework logging: application errors always go to the system log; the log

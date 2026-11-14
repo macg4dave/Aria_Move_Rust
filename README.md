@@ -43,7 +43,7 @@ Open a terminal in the folder containing the downloaded `.deb` file. For example
 
 ```bash
 cd ~/Downloads
-sudo apt install ./aria-move_1.5.1_amd64.deb
+sudo apt install ./aria-move_1.5.2_amd64.deb
 ```
 
 The package installs aria2 as needed, creates its own service account and configures the automatic completion hook. You do **not** need to write a service file or a shell script.
@@ -89,7 +89,7 @@ Run `uname -m` if unsure. On RHEL, AlmaLinux and Rocky Linux, aria2 comes from E
 
 ```bash
 sudo dnf install epel-release        # RHEL-family only
-sudo dnf install ./aria-move-1.5.1-1.el9.x86_64.rpm
+sudo dnf install ./aria-move-1.5.2-1.el9.x86_64.rpm
 ```
 
 As usual for RPM packages, the service is installed but not started. Start it and enable it at boot:

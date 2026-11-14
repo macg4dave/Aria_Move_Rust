@@ -1,6 +1,6 @@
 # Local release packaging
 
-Versions use three parts (for example 1.5.1) in Cargo, Debian and RPM metadata.
+Versions use three parts (for example 1.5.2) in Cargo, Debian and RPM metadata.
 Targets: Linux amd64/arm64 (`.deb` and `.rpm`) and Windows x86_64.
 
 ## Docker release gate
@@ -39,7 +39,7 @@ the gate. Logs, package checksums and architecture PASS markers are written to
 For every release, run this gate, the RPM gate below and `pwsh -File scripts/package-windows-release.ps1`
 on Windows to test and archive the executable with README, docs and LICENSE. Create
 `SHA256SUMS` covering every uploaded artifact. Commit the source, tag that commit
-as `vVERSION` (for example `v1.5.1`), push it, then create the GitHub
+as `vVERSION` (for example `v1.5.2`), push it, then create the GitHub
 release with the tested artifacts and an honest test/compatibility summary.
 The gate does not upload, tag, or publish anything itself. No CI is required.
 

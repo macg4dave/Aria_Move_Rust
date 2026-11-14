@@ -77,5 +77,9 @@ exit 0
 %dir %attr(0750,aria-move,aria-move) %{_localstatedir}/log/aria-move
 
 %changelog
+* Sat Nov 14 2026 Dave <macg4dave@users.noreply.github.com> - 1.5.2-1
+- Recover safely from completed-file timestamp refreshes on SMB shares.
+- Add metadata diagnostics and concurrent/filesystem regression tests.
+
 * Sat Oct 31 2026 Dave <macg4dave@users.noreply.github.com> - 1.5.1-1
 - Add native RPM packaging with the managed aria2 service.
