@@ -1,0 +1,29 @@
+FROM rust:1.99-bookworm AS binary
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+RUN cargo build --locked --release
+
+FROM debian:trixie-slim AS guest
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    linux-image-amd64 initramfs-tools systemd-sysv python3 aria2 \
+    e2fsprogs xfsprogs btrfs-progs cifs-utils samba kmod util-linux iproute2 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=binary /build/target/release/aria_move /usr/local/bin/aria_move
+COPY tests/disk_vm/init.sh /test-init
+COPY tests/disk_vm/moves.py /moves.py
+RUN chmod +x /test-init
+
+FROM debian:trixie-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    qemu-system-x86 qemu-utils e2fsprogs && rm -rf /var/lib/apt/lists/*
+COPY --from=guest / /guest/
+RUN mkdir /base && cp /guest/boot/vmlinuz-* /base/vmlinuz \
+    && cp /guest/boot/initrd.img-* /base/initrd \
+    && truncate -s 4G /base/root.raw \
+    && mkfs.ext4 -q -F -d /guest /base/root.raw \
+    && qemu-img convert -f raw -O qcow2 /base/root.raw /base/root.qcow2 \
+    && rm /base/root.raw && rm -rf /guest
+COPY tests/disk_vm/run.sh /run-vm
+RUN chmod +x /run-vm
+ENTRYPOINT ["/run-vm"]

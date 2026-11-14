@@ -22,6 +22,10 @@ impl Drop for Hooks {
 
 fn run_batch(completed: Option<&Path>) {
     let fx = Fixture::new();
+    run_batch_with(&fx, completed);
+}
+
+fn run_batch_with(fx: &Fixture, completed: Option<&Path>) {
     let completed = completed.unwrap_or(&fx.completed);
     // Exercise concurrent creation of a missing completed directory too.
     if completed.exists() {
@@ -137,6 +141,34 @@ fn concurrent_aria2_hooks_finish_across_filesystems() {
         return;
     };
     run_batch(Some(&other.path().join("completed")));
+}
+
+#[test]
+#[ignore = "requires ARIA_MOVE_TEST_SHARE pointing to explicitly authorized test storage"]
+fn concurrent_hooks_on_real_share() {
+    let root = std::env::var_os("ARIA_MOVE_TEST_SHARE")
+        .expect("set ARIA_MOVE_TEST_SHARE to authorize real-storage tests");
+    let root = Path::new(&root);
+    assert!(
+        root.is_dir(),
+        "test share is unavailable: {}",
+        root.display()
+    );
+    // All writes and automatic cleanup stay inside owned temporary subtrees.
+    let share = Fixture::new_in(root);
+    eprintln!("local -> share: {}", share.completed.display());
+    run_batch(Some(&share.completed));
+    let local = Fixture::new();
+    eprintln!("share -> local: {}", share.download.display());
+    run_batch_with(&share, Some(&local.completed));
+    // The previous batch leaves completed files and log records: use a fresh
+    // fixture for the same-share rename case.
+    let same_share = Fixture::new_in(root);
+    eprintln!("share -> share: {}", same_share.root.display());
+    run_batch_with(&same_share, None);
+    share.close();
+    same_share.close();
+    eprintln!("PASS: 72 hook processes; all bytes verified; no sources, locks or staging remain");
 }
 
 #[test]

@@ -19,7 +19,20 @@ pub struct Fixture {
 impl Fixture {
     /// `incoming/` and `completed/` plus a `config.xml` pointing at them.
     pub fn new() -> Self {
-        let temp = tempfile::tempdir().unwrap();
+        Self::from_temp(tempfile::tempdir().unwrap())
+    }
+
+    /// Own only an exclusively created temporary subtree on opt-in storage.
+    pub fn new_in(root: &Path) -> Self {
+        Self::from_temp(
+            tempfile::Builder::new()
+                .prefix("aria_move_test_")
+                .tempdir_in(root)
+                .unwrap(),
+        )
+    }
+
+    fn from_temp(temp: TempDir) -> Self {
         // Canonical, so platform temp symlinks (macOS /var) are not rejected.
         let root = dunce::canonicalize(temp.path()).unwrap();
         let fixture = Self {
@@ -33,6 +46,11 @@ impl Fixture {
         fs::create_dir(&fixture.completed).unwrap();
         fixture.write_config("");
         fixture
+    }
+
+    /// Explicit cleanup for opt-in real-storage tests, reporting any failure.
+    pub fn close(self) {
+        self._temp.close().expect("remove owned test subtree");
     }
 
     /// Rewrite the config with both bases plus `extra` XML elements.

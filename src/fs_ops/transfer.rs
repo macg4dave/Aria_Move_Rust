@@ -40,7 +40,7 @@ impl Snapshot {
     pub(super) fn check_identity_and_size(&self, actual: &Self, path: &Path) -> Result<()> {
         let mut expected = *self;
         expected.modified = actual.modified;
-        expected.check_matches(actual, path, "source size or identity changed before retry")
+        expected.check_matches(actual, path, "source size or identity changed")
     }
     pub(super) fn new(file: &File, meta: &Metadata) -> Result<Self> {
         let directory = meta.is_dir();
@@ -96,6 +96,27 @@ pub(super) fn copy_file(src: &Path, destination: &mut File) -> Result<(Snapshot,
         .with_context(|| format!("verify copy of {}", src.display()))?;
     snapshot.check(&source, src)?;
     Ok((snapshot, meta))
+}
+
+/// A timestamp refresh after publication is safe only if the original source
+/// identity/length still match and a fresh, stable comparison proves every byte
+/// is present in the published destination. Never refresh identity or size.
+pub(super) fn verify_published(src: &Path, dest: &Path, expected: &Snapshot) -> Result<()> {
+    let mut source = platform::open_regular_read(src)?;
+    let snapshot = Snapshot::of(&source)?;
+    expected.check_identity_and_size(&snapshot, src)?;
+    let mut destination = platform::open_regular_read(dest)?;
+    let published = Snapshot::of(&destination)?;
+    verify_equal(&mut source, &mut destination).with_context(|| {
+        format!(
+            "reverify published copy {} against {}",
+            dest.display(),
+            src.display()
+        )
+    })?;
+    snapshot.check(&source, src)?;
+    published.check(&destination, dest)?;
+    Ok(())
 }
 
 /// Cancellable copy from the start of `source` to the current end of `destination`.
@@ -215,6 +236,29 @@ mod tests {
         fs::write(&other, b"three")?;
         let replacement = Snapshot::of(&File::open(&other)?)?;
         assert_ne!(snapshot.identity, replacement.identity);
+        Ok(())
+    }
+
+    #[test]
+    fn published_verification_rejects_corrupt_destinations_and_replaced_sources() -> Result<()> {
+        let _guard = shutdown::test_guard();
+        let temp = tempfile::tempdir()?;
+        let source = temp.path().join("source");
+        let dest = temp.path().join("published");
+        fs::write(&source, b"verified")?;
+        fs::write(&dest, b"verified")?;
+        let snapshot = Snapshot::of(&File::open(&source)?)?;
+        verify_published(&source, &dest, &snapshot)?;
+        fs::write(&dest, b"corrupt!")?;
+        assert!(verify_published(&source, &dest, &snapshot).is_err());
+        fs::write(&dest, b"verified")?;
+        let replacement = temp.path().join("replacement");
+        fs::write(&replacement, b"verified")?;
+        fs::remove_file(&source)?;
+        fs::rename(replacement, &source)?;
+        assert!(verify_published(&source, &dest, &snapshot).is_err());
+        assert_eq!(fs::read(source)?, b"verified");
+        assert_eq!(fs::read(dest)?, b"verified");
         Ok(())
     }
 

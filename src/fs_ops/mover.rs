@@ -176,9 +176,23 @@ fn open_entry(path: &Path, directory: bool) -> Result<File> {
 
 /// Recheck each entry immediately before removal: a whole-tree check can be
 /// stale by the time a large cleanup reaches this entry. Never recurse.
-fn remove_entry(source: &Path, entry: &Entry) -> Result<()> {
+fn remove_entry(source: &Path, entry: &Entry, published: Option<&Path>) -> Result<()> {
     let handle = open_entry(source, entry.directory)?;
-    entry.snapshot.check(&handle, source)?;
+    if let Err(error) = entry.snapshot.check(&handle, source) {
+        match published.filter(|_| {
+            !entry.directory
+                && error
+                    .downcast_ref::<transfer::SourceChanged>()
+                    .is_some_and(|changed| changed.timestamp_only())
+        }) {
+            Some(dest) => {
+                tracing::warn!(source = %source.display(), %error,
+                    "Source timestamp changed after publication; reverifying bytes before cleanup");
+                transfer::verify_published(source, dest, &entry.snapshot)?;
+            }
+            None => return Err(error),
+        }
+    }
     // Windows read handles deny deletion, so release after checking identity.
     drop(handle);
     if entry.directory {
@@ -265,13 +279,13 @@ fn stage_with_retries(
 fn check_inventory_identity(src: &Path, expected: &[Entry], actual: &[Entry]) -> Result<()> {
     ensure!(
         actual.len() == expected.len(),
-        "source entries changed before retry: {}",
+        "source entries changed: {}",
         src.display()
     );
     for (expected, actual) in expected.iter().zip(actual) {
         ensure!(
             expected.relative == actual.relative && expected.directory == actual.directory,
-            "source entries changed before retry: {}",
+            "source entries changed: {}",
             src.display()
         );
         expected
@@ -412,11 +426,12 @@ fn publish_copy(
             src.display()
         )
     };
-    check_inventory(src, entries, "source changed after copying").with_context(retained)?;
+    check_inventory_identity(src, entries, &inventory(src).with_context(retained)?)
+        .with_context(retained)?;
     for entry in entries.iter().rev() {
         shutdown::check().with_context(retained)?;
         let source = at(src, &entry.relative);
-        remove_entry(&source, entry).with_context(|| {
+        remove_entry(&source, entry, Some(&at(&dest, &entry.relative))).with_context(|| {
             format!(
                 "published {}; cannot remove source {}",
                 dest.display(),
@@ -440,7 +455,10 @@ mod tests {
 
     impl Fixture {
         fn new() -> Self {
-            let temp = tempfile::tempdir().unwrap();
+            Self::from_temp(tempfile::tempdir().unwrap())
+        }
+
+        fn from_temp(temp: tempfile::TempDir) -> Self {
             let root = dunce::canonicalize(temp.path()).unwrap();
             let config = Config::new(root.join("incoming"), root.join("completed"));
             fs::create_dir(&config.download_base).unwrap();
@@ -524,6 +542,64 @@ mod tests {
     }
 
     const STRATEGIES: [bool; 2] = [false, true];
+
+    #[test]
+    #[ignore = "requires ARIA_MOVE_TEST_SHARE pointing to explicitly authorized test storage"]
+    fn real_share_metadata_and_concurrent_forced_copies() -> Result<()> {
+        let _guard = shutdown::test_guard();
+        let root = std::env::var_os("ARIA_MOVE_TEST_SHARE")
+            .context("set ARIA_MOVE_TEST_SHARE to authorize real-storage tests")?;
+        let temp = tempfile::Builder::new()
+            .prefix("aria_move_test_")
+            .tempdir_in(root)?;
+        let fx = Fixture::from_temp(temp);
+        let bytes: Vec<_> = (0..16 * 1024 * 1024).map(|n| (n % 251) as u8).collect();
+        let sources: Vec<_> = (0..4)
+            .map(|index| {
+                fx.write(
+                    &format!("large-{index}.bin"),
+                    &bytes[..bytes.len() - index * 123],
+                )
+            })
+            .collect();
+        let snapshot = Snapshot::of(&open_entry(&sources[0], false)?)?;
+        eprintln!("share metadata baseline: {snapshot:?}");
+        // Reopen across several seconds rather than inspecting one cached handle.
+        for _ in 0..120 {
+            snapshot.check(&open_entry(&sources[0], false)?, &sources[0])?;
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        let barrier = std::sync::Barrier::new(sources.len());
+        std::thread::scope(|scope| -> Result<()> {
+            let handles: Vec<_> = sources
+                .iter()
+                .enumerate()
+                .map(|(index, source)| {
+                    let barrier = &barrier;
+                    let config = &fx.config;
+                    let bytes = &bytes;
+                    scope.spawn(move || -> Result<()> {
+                        barrier.wait();
+                        let dest = move_with(config, source, true)?;
+                        assert_eq!(fs::read(dest)?, bytes[..bytes.len() - index * 123]);
+                        assert!(!source.exists());
+                        Ok(())
+                    })
+                })
+                .collect();
+            for handle in handles {
+                handle.join().unwrap()?;
+            }
+            Ok(())
+        })?;
+        assert_eq!(fx.completed_names().len(), sources.len());
+        assert_eq!(fs::read_dir(&fx.config.download_base)?.count(), 0);
+        eprintln!(
+            "PASS: stable metadata across 120 reopens; four concurrent forced copies verified and sources removed"
+        );
+        fx._temp.close()?;
+        Ok(())
+    }
 
     #[test]
     fn concurrent_distinct_downloads_finish_for_both_strategies() -> Result<()> {
@@ -801,21 +877,21 @@ mod tests {
         let source = fx.write("file", b"original");
         let entries = inventory(&source)?;
         fs::write(&source, b"changed contents")?;
-        assert!(remove_entry(&source, &entries[0]).is_err());
+        assert!(remove_entry(&source, &entries[0], None).is_err());
         assert_eq!(fs::read(&source)?, b"changed contents");
 
         let entries = inventory(&source)?;
         let replacement = fx.write("replacement", b"changed contents");
         fs::remove_file(&source)?;
         fs::rename(replacement, &source)?;
-        assert!(remove_entry(&source, &entries[0]).is_err());
+        assert!(remove_entry(&source, &entries[0], None).is_err());
         assert_eq!(fs::read(&source)?, b"changed contents");
 
         fs::create_dir(fx.incoming("directory"))?;
         let directory = fx.incoming("directory");
         let entries = inventory(&directory)?;
         fs::write(directory.join("unexpected"), b"keep")?;
-        assert!(remove_entry(&directory, &entries[0]).is_err());
+        assert!(remove_entry(&directory, &entries[0], None).is_err());
         assert_eq!(fs::read(directory.join("unexpected"))?, b"keep");
         Ok(())
     }
@@ -987,26 +1063,37 @@ mod tests {
     }
 
     #[test]
-    fn timestamp_changes_after_publication_retain_source_without_retrying() -> Result<()> {
+    fn timestamp_changes_after_publication_require_matching_bytes_before_removal() -> Result<()> {
         let _guard = shutdown::test_guard();
-        let fx = Fixture::new();
-        let source = fx.write("file.bin", b"verified");
-        let dest = fx.config.completed_base.join("file.bin");
-        filetime::set_file_mtime(
-            &source,
-            filetime::FileTime::from_unix_time(1_700_000_000, 0),
-        )?;
-        let entries = inventory(&source)?;
-        let (stage, staged) = stage_copy(&fx.config, &source, &dest, &entries)?;
-        filetime::set_file_mtime(
-            &source,
-            filetime::FileTime::from_unix_time(1_700_000_001, 0),
-        )?;
-        let error = publish_copy(&fx.config, &source, &dest, &entries, stage, staged).unwrap_err();
-        assert!(format!("{error:#}").contains("retained"));
-        assert_eq!(fs::read(source)?, b"verified");
-        assert_eq!(fs::read(dest)?, b"verified");
-        assert_eq!(fx.completed_names(), ["file.bin"]);
+        for content_changed in [false, true] {
+            let fx = Fixture::new();
+            let source = fx.write("file.bin", b"verified");
+            let dest = fx.config.completed_base.join("file.bin");
+            filetime::set_file_mtime(
+                &source,
+                filetime::FileTime::from_unix_time(1_700_000_000, 0),
+            )?;
+            let entries = inventory(&source)?;
+            let (stage, staged) = stage_copy(&fx.config, &source, &dest, &entries)?;
+            if content_changed {
+                fs::write(&source, b"modified")?;
+            }
+            filetime::set_file_mtime(
+                &source,
+                filetime::FileTime::from_unix_time(1_700_000_001, 0),
+            )?;
+            let result = publish_copy(&fx.config, &source, &dest, &entries, stage, staged);
+            if content_changed {
+                let error = result.unwrap_err();
+                assert!(format!("{error:#}").contains("cannot remove source"));
+                assert_eq!(fs::read(&source)?, b"modified");
+            } else {
+                result?;
+                assert!(!source.exists());
+            }
+            assert_eq!(fs::read(dest)?, b"verified");
+            assert_eq!(fx.completed_names(), ["file.bin"]);
+        }
         Ok(())
     }
 

@@ -477,7 +477,7 @@ sudo tail -n 50 /var/log/aria-move/aria_move.log
 
 Make sure aria2 has the `on-download-complete` setting pointing to the correct executable, and that `download_base` matches aria2's incoming directory. Aria Move intentionally refuses files that still have aria2 control files indicating an incomplete download.
 
-For `source changed` errors on completed downloads, the log includes the old and new size, modification time and filesystem identity. A metadata mismatch does not by itself prove the download is unfinished. Before publishing a copied download, timestamp-only mismatches trigger up to three full copy-and-verification attempts, with a one-second pause between attempts. Size, identity or directory-entry changes stop the move. If checks fail after publication, the destination and remaining source are retained; the move is not automatically restarted.
+For `source changed` errors on completed downloads, the log includes the old and new size, modification time and filesystem identity. A metadata mismatch does not by itself prove the download is unfinished. Before publishing a copied download, timestamp-only mismatches trigger up to three full copy-and-verification attempts, with a one-second pause between attempts. After publication, a timestamp-only change requires a fresh byte-for-byte comparison with the published destination before deleting that source file. Size, identity, directory-entry or content differences stop cleanup and retain the remaining source. The published move is never automatically restarted.
 
 ### Permission denied
 
